@@ -1,38 +1,45 @@
 /**
  * Gesture router — turns FSM events from the overlay renderer into
- * concrete OS-level input via the nut.js dispatcher.
+ * concrete OS-level input.
  *
- * Goal (post-v0.2): hand input acts on the screen like the Meta Quest
- * or Apple Vision Pro pinch — the user's physical mouse cursor stays
- * exactly where they left it. Pinching, scrolling, and dragging via
- * hand do not "steal" the OS mouse cursor.
+ * Two backends:
  *
- * Implementation: because there's no cross-platform desktop API that
- * fires a mouse click at an arbitrary screen position without first
- * moving the cursor, we save → jump → act → restore around every
- * hand action. The cursor flickers to the hand point for the
- * duration of the synthesized event, then snaps back to the
- * physical-mouse position so it appears undisturbed.
+ *   1. **Touch injection** (Windows, when available). Uses
+ *      `InjectTouchInput` to fire taps and drags as touch events that
+ *      the OS treats as a separate input channel. The mouse cursor is
+ *      never touched. This is the Quest / Vision Pro behavior — hand
+ *      and mouse coexist as independent input modalities.
  *
- *   pinchDown   → save cursor, jump to hand, mouseDown
- *   tracking    → idle: do nothing; drag: cursor follows hand
- *   pinchUp     → mouseUp, restore cursor
- *   scroll      → save cursor (once per scroll burst), jump to hand,
- *                 scroll, restore after a debounced 250 ms idle
- *   swipe       → keystroke only (Alt+Tab is global)
- *   resize      → handled by main/windows/resize.ts
- *   idle / lost → defensive: release any held button, restore cursor
+ *   2. **Mouse with save/restore** (fallback for non-Windows, or when
+ *      touch injection initialization fails). Saves the user's
+ *      physical mouse position, jumps the cursor to the hand point to
+ *      fire the synthesized event, then snaps the cursor back. End
+ *      state: mouse where the user left it. There's a brief visible
+ *      flicker for the duration of each event.
  *
- * A native touch-injection helper (Windows
- * `InjectSyntheticPointerInput`, macOS `CGEventCreateMouseEvent`,
- * Linux uinput) would eliminate the flicker entirely; that's the
- * next step but out of scope for v0.1. See README → Roadmap.
+ * Per-gesture mapping (touch backend; mouse fallback in parens):
+ *
+ *   pinchDown {left}  → touch pressDown          (save + jump + mouseDown)
+ *   tracking + drag   → touch pressMove          (jump cursor)
+ *   pinchUp   {left}  → touch pressUp            (mouseUp + restore)
+ *   pinchDown {right} → mouse save+jump+mouseDown(no touch right-click; same)
+ *   pinchUp   {right} → mouse mouseUp + restore  (same)
+ *   click             → no-op (down/up pair handles it)
+ *   scroll            → mouse save+jump+scroll, debounced restore
+ *   swipe             → keystroke (no cursor jump regardless of backend)
+ *   twoHandResize*    → main/windows/resize.ts
+ *
+ * Right-click via touch on Windows is a long-press (≥ ~600 ms), which
+ * doesn't match our thumb+middle pinch model. Right-click stays on
+ * the mouse path for both backends.
  */
 
 import type { GestureEmitPayload } from '@swoosh/shared/ipc';
 import type { InputDispatcher } from './dispatcher';
 import { mapToScreen } from './coords';
 import { createResizeDispatcher } from '../windows/resize';
+import { getTouchInjector } from './touch';
+import { logger } from '../logger';
 
 export interface GestureRouter {
   handle(payload: GestureEmitPayload): void;
@@ -47,15 +54,27 @@ export function createGestureRouter(input: InputDispatcher): GestureRouter {
   let enabled = true;
   let lastDragMoveAt = 0;
   const resize = createResizeDispatcher();
+  const touch = getTouchInjector();
 
-  // Cursor preservation state. When Swoosh "claims" the cursor for a
-  // hand action it stashes the physical-mouse position here; once the
-  // action ends we move the cursor back so the user perceives their
-  // mouse as untouched.
+  if (touch.available) {
+    logger.info('gestureRouter: using touch injection (mouse cursor untouched)');
+  } else {
+    logger.info('gestureRouter: using mouse with save/restore fallback');
+  }
+
+  // Mouse-fallback state (right-click + scroll always use this path,
+  // and the whole router uses it on non-Windows).
   let savedCursorPos: { x: number; y: number } | null = null;
-  let dragActive = false;
-  let dragButton: 'left' | 'right' | null = null;
   let scrollRestoreTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Active drag state. With touch backend, this is the touch contact
+  // we'll dispatch pressMove / pressUp against. With mouse backend
+  // it's a flag indicating the cursor should follow the hand.
+  let drag:
+    | { kind: 'touch'; lastPt: { x: number; y: number } }
+    | { kind: 'mouseLeft'; lastPt: { x: number; y: number } }
+    | { kind: 'mouseRight' }
+    | null = null;
 
   function saveCursorOnce(): void {
     if (savedCursorPos) return;
@@ -69,11 +88,6 @@ export function createGestureRouter(input: InputDispatcher): GestureRouter {
     void input.moveCursor(target.x, target.y);
   }
 
-  function jumpCursor(norm: { x: number; y: number }): void {
-    const screenPt = mapToScreen(norm);
-    void input.moveCursor(screenPt.x, screenPt.y);
-  }
-
   function clearScrollTimer(): void {
     if (scrollRestoreTimer) {
       clearTimeout(scrollRestoreTimer);
@@ -81,16 +95,24 @@ export function createGestureRouter(input: InputDispatcher): GestureRouter {
     }
   }
 
+  function toScreen(norm: { x: number; y: number }): { x: number; y: number } {
+    return mapToScreen(norm);
+  }
+
   return {
     setEnabled(next) {
       enabled = next;
       if (!enabled) {
-        // Pause: release any held button and restore the cursor so the
-        // user isn't left with a stuck drag or a hijacked cursor.
-        if (dragActive) {
-          if (dragButton) void input.mouseUp(dragButton);
-          dragActive = false;
-          dragButton = null;
+        // Pause: release any held drag / contact and restore cursor.
+        if (drag) {
+          if (drag.kind === 'touch') {
+            touch.pressUp(drag.lastPt.x, drag.lastPt.y);
+          } else if (drag.kind === 'mouseLeft') {
+            void input.mouseUp('left');
+          } else {
+            void input.mouseUp('right');
+          }
+          drag = null;
         }
         clearScrollTimer();
         restoreCursor();
@@ -102,56 +124,79 @@ export function createGestureRouter(input: InputDispatcher): GestureRouter {
 
       switch (g.kind) {
         case 'pinchDown': {
-          // Snapshot the physical-mouse position before we move the
-          // cursor for the click. On pinchUp we'll snap back.
+          const pt = toScreen(payload.cursor);
+
+          if (g.button === 'left' && touch.available) {
+            // Touch backend: fire a sustained touch contact. The OS
+            // cursor never moves.
+            const ok = touch.pressDown(pt.x, pt.y);
+            if (ok) {
+              drag = { kind: 'touch', lastPt: pt };
+              break;
+            }
+            logger.warn('touch.pressDown failed; falling back to mouse for this gesture');
+            // fallthrough to mouse path
+          }
+
+          // Mouse path: save physical cursor, jump, mouseDown.
           saveCursorOnce();
-          jumpCursor(payload.cursor);
+          void input.moveCursor(pt.x, pt.y);
           void input.mouseDown(g.button);
-          dragActive = true;
-          dragButton = g.button;
+          drag =
+            g.button === 'left'
+              ? { kind: 'mouseLeft', lastPt: pt }
+              : { kind: 'mouseRight' };
           break;
         }
 
         case 'pinchUp': {
-          if (dragButton) void input.mouseUp(dragButton);
-          dragActive = false;
-          dragButton = null;
-          // Restore the cursor to where the physical mouse was *before*
-          // this whole interaction started — across drags too, so a
-          // hand-driven drag-and-drop ends with the mouse cursor back
-          // where the user left it.
+          if (!drag) {
+            // Defensive — out-of-order events. Just release the named button.
+            void input.mouseUp(g.button);
+            break;
+          }
+          if (drag.kind === 'touch') {
+            const pt = drag.lastPt;
+            touch.pressUp(pt.x, pt.y);
+            // Touch backend doesn't touch the mouse, so nothing to
+            // restore — there was never a saved cursor.
+            drag = null;
+            break;
+          }
+          // Mouse path.
+          const button = drag.kind === 'mouseLeft' ? 'left' : 'right';
+          void input.mouseUp(button);
+          drag = null;
           restoreCursor();
           break;
         }
 
         case 'click':
-          // Synthesized click event from the FSM — the down/up pair
-          // already fired, so we have nothing to do here.
+          // The down/up pair already covers it.
           break;
 
         case 'scroll': {
-          // Wheel events fire at the cursor's current position, so
-          // we have to move the cursor to the hand point for the
-          // scroll to land in the right place. We save the physical
-          // mouse position the first time we do this in a scroll
-          // burst, then debounce a restore once the user stops
-          // scrolling for 250 ms.
+          // Scroll wheel events fire at the cursor. We use the mouse
+          // path for scroll regardless of backend because synthetic
+          // touch scroll requires sustained drag motion to be
+          // interpreted as scrolling, which doesn't map well to our
+          // continuous palm-motion event stream.
           saveCursorOnce();
           clearScrollTimer();
-          jumpCursor(payload.cursor);
+          const pt = toScreen(payload.cursor);
+          void input.moveCursor(pt.x, pt.y);
           const dxPx = Math.round(g.dx * 200);
           const dyPx = Math.round(g.dy * 200);
           void input.scroll(dxPx, dyPx);
           scrollRestoreTimer = setTimeout(() => {
             scrollRestoreTimer = null;
-            // Don't pull the cursor away in the middle of a drag.
-            if (!dragActive) restoreCursor();
+            if (!drag) restoreCursor();
           }, SCROLL_IDLE_RESTORE_MS);
           break;
         }
 
         case 'swipe': {
-          // Alt+Tab is global — no cursor jump needed.
+          // Alt+Tab is global — no cursor jump on either backend.
           const combo = g.direction === 'right' ? 'alt+tab' : 'alt+shift+tab';
           void input.keystroke(combo);
           break;
@@ -168,27 +213,37 @@ export function createGestureRouter(input: InputDispatcher): GestureRouter {
           break;
 
         case 'tracking': {
-          // Drag mode: while the pinch is held, the cursor follows the
-          // hand at frame cadence (throttled) so drag-and-drop feels
-          // natural. Idle tracking does nothing — the SwooshCursor in
-          // the overlay shows the hand position.
-          if (dragActive) {
-            const now = Date.now();
-            if (now - lastDragMoveAt >= DRAG_MOVE_THROTTLE_MS) {
-              jumpCursor(payload.cursor);
-              lastDragMoveAt = now;
-            }
+          // Drag mode: while a pinch is held, update the contact (or
+          // cursor on the mouse fallback) at the hand's new position
+          // so drag-and-drop / touch pan tracks the hand.
+          if (!drag) break;
+          const now = Date.now();
+          if (now - lastDragMoveAt < DRAG_MOVE_THROTTLE_MS) break;
+          lastDragMoveAt = now;
+          const pt = toScreen(payload.cursor);
+          if (drag.kind === 'touch') {
+            touch.pressMove(pt.x, pt.y);
+            drag.lastPt = pt;
+          } else if (drag.kind === 'mouseLeft') {
+            void input.moveCursor(pt.x, pt.y);
+            drag.lastPt = pt;
           }
+          // mouseRight drag doesn't move the cursor — right-click+drag
+          // is a niche interaction we don't support today.
           break;
         }
 
         case 'idle':
-          // Hand left the frame. Defensive cleanup so the user isn't
-          // left with a half-held button or a hijacked cursor.
-          if (dragActive) {
-            if (dragButton) void input.mouseUp(dragButton);
-            dragActive = false;
-            dragButton = null;
+          // Defensive cleanup.
+          if (drag) {
+            if (drag.kind === 'touch') {
+              touch.pressUp(drag.lastPt.x, drag.lastPt.y);
+            } else if (drag.kind === 'mouseLeft') {
+              void input.mouseUp('left');
+            } else {
+              void input.mouseUp('right');
+            }
+            drag = null;
           }
           clearScrollTimer();
           restoreCursor();
