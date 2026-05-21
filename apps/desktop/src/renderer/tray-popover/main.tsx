@@ -52,6 +52,7 @@ function StatusBadge({ state }: { state: TrackingState }) {
 function TrayPopoverApp() {
   const [tracking, setTracking] = useState<TrackingState>({ kind: 'active', fps: 0 });
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_USER_SETTINGS);
+  const [update, setUpdate] = useState<{ version: string } | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -69,11 +70,15 @@ function TrayPopoverApp() {
     const unsubSettings = window.swoosh.settings.onChanged((s) => {
       if (mounted) setSettings(s);
     });
+    const unsubUpdate = window.swoosh.update.onAvailable((info) => {
+      if (mounted) setUpdate({ version: info.version });
+    });
 
     return () => {
       mounted = false;
       unsubTracking();
       unsubSettings();
+      unsubUpdate();
     };
   }, []);
 
@@ -100,6 +105,18 @@ function TrayPopoverApp() {
         </div>
         <StatusBadge state={tracking} />
       </header>
+
+      {/* Update banner — appears when electron-updater finds a newer release */}
+      {update ? (
+        <button
+          type="button"
+          onClick={() => window.swoosh.update.install()}
+          className="flex items-center justify-between rounded-card bg-sun-500 px-3 py-2 text-xs font-extrabold text-ink-950 transition hover:bg-sun-400"
+        >
+          <span>Update v{update.version} ready</span>
+          <span>Install &amp; restart →</span>
+        </button>
+      ) : null}
 
       {/* Primary action */}
       <Button

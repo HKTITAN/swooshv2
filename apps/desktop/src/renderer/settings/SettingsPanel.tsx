@@ -33,6 +33,8 @@ export function SettingsPanel({ settings, onPatch, onAdjustingThreshold }: Props
   const [cameras, setCameras] = useState<CameraSource[]>([]);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [diagStatus, setDiagStatus] = useState<string | null>(null);
+  const [update, setUpdate] = useState<{ version: string } | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<number | null>(null);
 
   // Enumerate cameras on mount + when settings.cameraId changes (label
   // resolution may have changed after permission).
@@ -42,6 +44,18 @@ export function SettingsPanel({ settings, onPatch, onAdjustingThreshold }: Props
       .then((list) => setCameras(list))
       .catch(() => setCameras([]));
   }, [settings.cameraId]);
+
+  // Subscribe to auto-update events so the Diagnostics banner can react.
+  useEffect(() => {
+    const unsubAvail = window.swoosh.update.onAvailable((info) =>
+      setUpdate({ version: info.version }),
+    );
+    const unsubProg = window.swoosh.update.onProgress((p) => setUpdateProgress(p));
+    return () => {
+      unsubAvail();
+      unsubProg();
+    };
+  }, []);
 
   // Helper to ensure exit ≥ enter when either slider moves.
   const setPinchEnter = (next: number) => {
@@ -269,12 +283,45 @@ export function SettingsPanel({ settings, onPatch, onAdjustingThreshold }: Props
 
       {/* Diagnostics */}
       <Card heading="Diagnostics" compact>
+        {update ? (
+          <div className="mb-3 flex items-center justify-between rounded-card bg-sun-500 px-3 py-2 text-sm font-extrabold text-ink-950">
+            <span>
+              Update available: v{update.version}
+              {updateProgress != null && updateProgress < 100
+                ? ` — downloading ${Math.round(updateProgress)}%`
+                : ''}
+            </span>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => window.swoosh.update.install()}
+            >
+              Install &amp; restart
+            </Button>
+          </div>
+        ) : null}
         <div className="flex flex-wrap items-center gap-3">
           <Button variant="ghost" size="sm" onClick={replayTutorial}>
             Replay tutorial
           </Button>
           <Button variant="ghost" size="sm" onClick={runBenchmark}>
             Re-run benchmark
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={async () => {
+              setDiagStatus('Checking for updates…');
+              try {
+                const res = await window.swoosh.update.check();
+                if (res.hasUpdate) setDiagStatus(`Update v${res.latest} available.`);
+                else setDiagStatus(`Up to date (v${res.current}).`);
+              } catch (err) {
+                setDiagStatus(`Update check failed: ${String(err)}`);
+              }
+            }}
+          >
+            Check for updates
           </Button>
         </div>
         {diagStatus ? (

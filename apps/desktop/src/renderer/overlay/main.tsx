@@ -51,6 +51,40 @@ function AmbiguityHint({ which }: { which: 'index' | 'middle' | null }) {
 }
 
 /**
+ * Low-light hint (T1003): toast that appears when MediaPipe's hand
+ * detection confidence stays low for a sustained window. Suggests the
+ * user improve lighting — usually a sub-30%-confidence hand means the
+ * camera can barely see it.
+ */
+function LowLightHint({ visible }: { visible: boolean }) {
+  if (!visible) return null;
+  return (
+    <div
+      className="pointer-events-none fixed bottom-8 left-1/2 z-40 -translate-x-1/2 rounded-pill bg-sun-500/95 px-4 py-2 text-sm font-extrabold text-ink-950 shadow-glow"
+      style={{ fontFamily: '"Baloo 2", system-ui' }}
+    >
+      💡 Lighting too low? Move closer to a light source.
+    </div>
+  );
+}
+
+/**
+ * Camera-disconnected toast (T1004): shown when the active camera
+ * stream's video track ends (unplugged, switched, killed by the OS).
+ */
+function CameraLostToast({ visible }: { visible: boolean }) {
+  if (!visible) return null;
+  return (
+    <div
+      className="pointer-events-none fixed bottom-8 left-1/2 z-40 -translate-x-1/2 rounded-pill bg-flare-500 px-4 py-2 text-sm font-extrabold text-ink-950 shadow-glow"
+      style={{ fontFamily: '"Baloo 2", system-ui' }}
+    >
+      📷 Camera disconnected — tracking paused.
+    </div>
+  );
+}
+
+/**
  * Two-hand resize indicator (T603): a dashed line between the two
  * pinch points + an "↔ Resize ×N.NN" badge near the midpoint. Only
  * renders while the FSM is in TWO_HAND_RESIZE.
@@ -116,6 +150,13 @@ function OverlayApp() {
   // for whether we're in TWO_HAND_RESIZE — we just mirror it for the UI.
   const [resizing, setResizing] = useState(false);
   const [resizeScale, setResizeScale] = useState(1);
+  // Low-light hint state (T1003). We sustain a hint after a few seconds of
+  // sub-threshold confidence and clear it once the score recovers.
+  const [lowLight, setLowLight] = useState(false);
+  const lowLightFramesRef = useRef(0);
+  const goodLightFramesRef = useRef(0);
+  // Camera-lost state (T1004) — surfaced via onCameraError + track.ended.
+  const [cameraLost, setCameraLost] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,6 +178,22 @@ function OverlayApp() {
         onLandmarks: (h) => {
           if (cancelled) return;
           setHands(h);
+          // Track confidence for the low-light hint. We require ~90
+          // consecutive low-confidence frames (~3 s at 30 FPS) to
+          // surface the hint, and ~30 good frames to clear it. Hands
+          // are intermittently absent — empty array doesn't count.
+          if (h.length > 0) {
+            const bestScore = h.reduce((m, x) => (x.score > m ? x.score : m), 0);
+            if (bestScore < 0.5) {
+              lowLightFramesRef.current++;
+              goodLightFramesRef.current = 0;
+              if (lowLightFramesRef.current > 90) setLowLight(true);
+            } else {
+              goodLightFramesRef.current++;
+              lowLightFramesRef.current = 0;
+              if (goodLightFramesRef.current > 30) setLowLight(false);
+            }
+          }
           // Detect ambiguous pinch: both finger pairs near threshold
           // simultaneously. Flash the active label so the user knows
           // the FSM had to pick.
@@ -159,6 +216,14 @@ function OverlayApp() {
             }
           }
         },
+        onCameraError: (e) => {
+          if (cancelled) return;
+          setCameraLost(true);
+          setActive(false);
+          // Auto-hide after 6 s so the toast doesn't linger forever.
+          setTimeout(() => setCameraLost(false), 6000);
+          console.warn('camera error', e);
+        },
         onEmit: (payload: GestureEmitPayload) => {
           // Forward every FSM event to main (T202).
           window.swoosh.gesture.emit(payload);
@@ -177,6 +242,23 @@ function OverlayApp() {
         },
       });
       if (!cancelled) setActive(res.ok);
+
+      // Camera-lost mid-session detection (T1004): listen for the
+      // video track's `ended` event. Triggers when the camera is
+      // unplugged or the OS kills the stream. The pipeline's frame
+      // loop will stop producing landmarks but won't otherwise notify
+      // us — this hook surfaces the failure to the user.
+      if (res.ok && 'stream' in res) {
+        const stream = res.stream as MediaStream;
+        for (const track of stream.getVideoTracks()) {
+          track.addEventListener('ended', () => {
+            if (cancelled) return;
+            setCameraLost(true);
+            setActive(false);
+            setTimeout(() => setCameraLost(false), 6000);
+          });
+        }
+      }
     })();
 
     return () => {
@@ -220,6 +302,8 @@ function OverlayApp() {
       />
       <RecordingIndicator visible={active} />
       <AmbiguityHint which={ambiguous} />
+      <LowLightHint visible={lowLight && active && !cameraLost} />
+      <CameraLostToast visible={cameraLost} />
       <ResizeIndicator
         active={resizing}
         scale={resizeScale}

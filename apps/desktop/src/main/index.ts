@@ -29,6 +29,8 @@ import { closeTutorialWindow, createTutorialWindow } from './windows/tutorial';
 import { createOverlayWindow, closeOverlayWindow } from './windows/overlay';
 import { destroySettingsWindow, openSettingsWindow } from './windows/settings';
 import { destroyTrayPopover, toggleTrayPopover } from './windows/trayPopover';
+import { runBenchmark } from './benchmark';
+import { createUpdater } from './updater';
 import { createTrackingController } from './tracking';
 import { createTray, trayStateFor } from './tray';
 
@@ -66,6 +68,7 @@ interface AppContext {
   router: ReturnType<typeof createGestureRouter>;
   tracking: ReturnType<typeof createTrackingController>;
   tray: ReturnType<typeof createTray>;
+  updater: ReturnType<typeof createUpdater>;
   disposeIpc: () => void;
 }
 
@@ -89,6 +92,12 @@ function bootstrap(): void {
     getSettings: () => settings.get(),
   });
   const tray = createTray();
+  const updater = createUpdater({
+    getEnabled: () => settings.get().updateChecksEnabled,
+    getLastCheckIso: () => settings.get().lastUpdateCheckAt,
+    setLastCheckIso: (iso) => settings.set({ lastUpdateCheckAt: iso }),
+  });
+  updater.start();
 
   // Hotkey from settings.
   tracking.setHotkey(settings.get().hotkeys.pauseResume);
@@ -131,10 +140,16 @@ function bootstrap(): void {
       createTutorialWindow();
     },
     onOpenSettings: () => openSettingsWindow(),
+    runBenchmark: () =>
+      runBenchmark({
+        applySettings: (patch) => settings.set(patch),
+      }),
+    checkForUpdate: () => updater.check(),
+    installUpdate: () => updater.install(),
     onQuit: () => app.quit(),
   });
 
-  context = { settings, input, osHooks, router, tracking, tray, disposeIpc };
+  context = { settings, input, osHooks, router, tracking, tray, updater, disposeIpc };
 
   // Mirror tracking state to the tray icon.
   setInterval(() => {
@@ -149,6 +164,20 @@ function bootstrap(): void {
   } else {
     createOverlayWindow();
   }
+
+  // Adaptive benchmark on first eligible launch (T801). If the user has
+  // never picked a fixed profile, run the benchmark a few seconds after
+  // startup so we don't compete with MediaPipe WASM loading. The result
+  // is written to settings via the runBenchmark ctx; the next pipeline
+  // start will pick up the new resolution/fps.
+  setTimeout(() => {
+    const live = settings.get();
+    if (live.performanceProfile === 'adaptive') {
+      runBenchmark({ applySettings: (patch) => settings.set(patch) }).catch((err) => {
+        logger.error('startup benchmark failed', { err: String(err) });
+      });
+    }
+  }, 5000);
 }
 
 function teardown(): void {
@@ -156,6 +185,7 @@ function teardown(): void {
   try {
     context.tracking.dispose();
     context.osHooks.stop();
+    context.updater.stop();
     context.disposeIpc();
     context.tray.destroy();
     closeOverlayWindow();

@@ -51,6 +51,8 @@ export const userSettingsSchema = z
 
     tutorialSeen: z.boolean(),
 
+    lastUpdateCheckAt: z.string().nullable(),
+
     shareLandmarks: z.boolean(),
   })
   // Hysteresis invariant: exit must exceed enter, otherwise a closed pinch

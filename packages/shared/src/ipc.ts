@@ -167,6 +167,10 @@ export interface UserSettings {
   // First-run / tutorial
   tutorialSeen: boolean;
 
+  // Internal bookkeeping (not shown directly in the UI)
+  /** ISO timestamp of the last successful update check, or null. */
+  lastUpdateCheckAt: string | null;
+
   // Dev / experimental
   shareLandmarks: boolean; // Forwards landmark data over IPC for debugging only
 }
@@ -188,5 +192,6 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   hotkeys: { pauseResume: 'Ctrl+Alt+Space' },
   updateChecksEnabled: true,
   tutorialSeen: false,
+  lastUpdateCheckAt: null,
   shareLandmarks: false,
 };
