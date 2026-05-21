@@ -43,10 +43,18 @@ const POINTER_FLAG_UP = 0x00040000;
 // PT_TOUCH discriminator for the POINTER_INFO union.
 const PT_TOUCH = 0x00000002;
 
-// Touch feedback mode: NONE suppresses Windows' default ripple ring
-// that appears around synthetic touch points — we have our own
-// SwooshCursor for visual feedback.
-const TOUCH_FEEDBACK_NONE = 0x3;
+// Touch feedback modes:
+//   DEFAULT  = 0x1  — Windows draws its small ripple at the touch point
+//   INDIRECT = 0x2  — feedback only on indirect (touchpad-style) input
+//   NONE     = 0x3  — no ripple. REQUIRES UIAccess privilege; without
+//                     it InitializeTouchInjection still succeeds but
+//                     subsequent InjectTouchInput calls fail with
+//                     ERROR_INVALID_PARAMETER (87). Discovered the
+//                     hard way after exhausting every other lead.
+// We use DEFAULT so injection actually works on a normal user app.
+// The small system ripple is acceptable — it's not unlike Quest's
+// visual confirmation. Our own SwooshCursor renders on top anyway.
+const TOUCH_FEEDBACK_DEFAULT = 0x1;
 
 // touchMask declares which auxiliary fields are valid. Must match
 // exactly which fields the packet populates, or Windows returns
@@ -234,7 +242,7 @@ export function getTouchInjector(): TouchApi {
     // Expose to the packer below.
     nativeGetTickCount = GetTickCount;
 
-    const initOk = InitializeTouchInjection(MAX_CONTACTS, TOUCH_FEEDBACK_NONE);
+    const initOk = InitializeTouchInjection(MAX_CONTACTS, TOUCH_FEEDBACK_DEFAULT);
     if (!initOk) {
       const err = GetLastError();
       logger.warn('InitializeTouchInjection returned 0 — falling back to mouse', {
