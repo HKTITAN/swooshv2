@@ -113,15 +113,28 @@ const unavailable: TouchApi = {
   pressUp: () => false,
 };
 
+// Monotonically increasing frame id + tick clock for every packet we
+// send. Windows rejects packets with dwTime == 0 AND PerformanceCount
+// == 0; it also expects successive frames to have strictly increasing
+// time. Sharing one counter across the whole module guarantees both.
+let nextFrameId = 1;
+const tickEpoch = Date.now();
+function nextTick(): number {
+  // Truncate to 32 bits; this needs to be roughly system-tick-like
+  // (milliseconds since some recent epoch). The value is opaque to
+  // Windows as long as it monotonically advances.
+  return (Date.now() - tickEpoch) >>> 0;
+}
+
 function packTouchInfo(x: number, y: number, flags: number, pointerId = 0): Buffer {
   const ix = Math.round(x);
   const iy = Math.round(y);
   const buf = Buffer.alloc(POINTER_TOUCH_INFO_SIZE);
 
-  // POINTER_INFO (96 bytes)
+  // POINTER_INFO (96 bytes including 4-byte trailing pad to 8-align)
   buf.writeUInt32LE(PT_TOUCH, 0);
   buf.writeUInt32LE(pointerId, 4);
-  buf.writeUInt32LE(0, 8); // frameId
+  buf.writeUInt32LE(nextFrameId++, 8); // frameId — must vary across frames
   buf.writeUInt32LE(flags >>> 0, 12);
   buf.writeBigUInt64LE(0n, 16); // sourceDevice = NULL
   buf.writeBigUInt64LE(0n, 24); // hwndTarget   = NULL
@@ -133,13 +146,16 @@ function packTouchInfo(x: number, y: number, flags: number, pointerId = 0): Buff
   buf.writeInt32LE(0, 52); // ptHimetricLocation.y
   buf.writeInt32LE(0, 56); // ptHimetricLocationRaw.x
   buf.writeInt32LE(0, 60); // ptHimetricLocationRaw.y
-  buf.writeUInt32LE(0, 64); // dwTime
+  // dwTime MUST be non-zero (or PerformanceCount must — never both).
+  // We set dwTime; PerformanceCount stays 0. Each successive call has
+  // a higher dwTime via the monotonic tickEpoch counter.
+  buf.writeUInt32LE(nextTick(), 64);
   buf.writeUInt32LE(0, 68); // historyCount
   buf.writeInt32LE(0, 72); // inputData
   buf.writeUInt32LE(0, 76); // dwKeyStates
-  buf.writeBigUInt64LE(0n, 80); // performanceCount
+  buf.writeBigUInt64LE(0n, 80); // performanceCount = 0 (using dwTime instead)
   buf.writeInt32LE(0, 88); // buttonChangeType (enum)
-  // 92-95: padding (already zeroed by Buffer.alloc)
+  // 92-95: trailing struct padding (already zeroed by Buffer.alloc)
 
   // POINTER_TOUCH_INFO tail (48 bytes)
   buf.writeUInt32LE(TOUCH_FLAG_NONE, 96); // touchFlags
@@ -158,7 +174,7 @@ function packTouchInfo(x: number, y: number, flags: number, pointerId = 0): Buff
   buf.writeInt32LE(ix + 2, 128);
   buf.writeInt32LE(iy + 2, 132);
   buf.writeUInt32LE(90, 136); // orientation — 90° per the MS sample
-  buf.writeUInt32LE(1024, 140); // pressure — center of MSDN 0..1024 range
+  buf.writeUInt32LE(1024, 140); // pressure — top of MSDN 0..1024 range
 
   return buf;
 }
