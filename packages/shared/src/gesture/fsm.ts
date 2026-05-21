@@ -17,7 +17,7 @@
 
 import type { FsmStepResult, Gesture, HandLandmarks } from '../types';
 import { LANDMARK } from '../types';
-import { pinchAnchor, pinchDistance } from './landmarks';
+import { isHandOpen, palmCenter, pinchAnchor, pinchDistance } from './landmarks';
 import { OneEuroFilter2D } from './filters';
 
 export type PinchButton = 'left' | 'right';
@@ -42,10 +42,28 @@ export interface FsmThresholds {
   dragLockTimeoutMs?: number;
   /** See dragLockTimeoutMs. Default 0.006 (≈ 8 px at 1280px wide). */
   dragLockMaxTravel?: number;
+  /** Scroll multiplier (settings.scrollSensitivity). Default 1.0. */
+  scrollSensitivity?: number;
+  /**
+   * Minimum normalized palm displacement per frame to emit a scroll
+   * event. Smaller deltas are ignored to avoid tremor-driven scrolling.
+   * Default 0.001 ≈ 1 px at 1280px wide.
+   */
+  scrollMinDelta?: number;
+  /**
+   * Per-frame horizontal palm velocity (norm/frame) above which the
+   * palm is considered to be "swiping". Default 0.04.
+   */
+  swipeMinVelocity?: number;
+  /**
+   * Number of consecutive frames the swipe velocity threshold must be
+   * exceeded before emitting a swipe event. Default 3.
+   */
+  swipeMinFrames?: number;
   smoothing: { minCutoff: number; beta: number };
 }
 
-export type FsmKind = 'IDLE' | 'TRACKING' | 'PINCH_LEFT' | 'PINCH_RIGHT';
+export type FsmKind = 'IDLE' | 'TRACKING' | 'PINCH_LEFT' | 'PINCH_RIGHT' | 'OPEN_PALM';
 
 interface PinchSubstate {
   button: PinchButton;
@@ -73,6 +91,10 @@ export interface FsmState {
    */
   lastIndexOpenTs: number;
   lastMiddleOpenTs: number;
+  /** Last frame's palm center for OPEN_PALM velocity tracking. */
+  lastPalm: { x: number; y: number; ts: number } | null;
+  /** Consecutive frames where horizontal palm velocity exceeded the swipe threshold. */
+  swipeStreak: { direction: 'left' | 'right'; frames: number; lastVel: number } | null;
 }
 
 export function createFsmState(thresholds: FsmThresholds): FsmState {
@@ -85,6 +107,8 @@ export function createFsmState(thresholds: FsmThresholds): FsmState {
     lastPointer: { x: 0.5, y: 0.5 },
     lastIndexOpenTs: 0,
     lastMiddleOpenTs: 0,
+    lastPalm: null,
+    swipeStreak: null,
   };
 }
 
@@ -127,6 +151,8 @@ export function step(
     prev.kind = 'IDLE';
     prev.pinch = undefined;
     prev.pointerFilter.reset();
+    prev.lastPalm = null;
+    prev.swipeStreak = null;
     return { state: prev, events, pointer: prev.lastPointer };
   }
 
@@ -238,12 +264,42 @@ export function step(
     } else {
       events.push({ kind: 'tracking' });
     }
+  } else if (prev.kind === 'OPEN_PALM') {
+    // Open-palm scroll / swipe (US4).
+    handleOpenPalm(prev, hand, thr, events);
+    // Exit OPEN_PALM if the hand closes or a pinch fires.
+    if (leftClosed) {
+      events.push({ kind: 'pinchDown', button: 'left' });
+      prev.kind = 'PINCH_LEFT';
+      prev.pinch = {
+        button: 'left',
+        downAt: { x: pointer.x, y: pointer.y },
+        maxTravel: 0,
+        downTs: hand.ts,
+      };
+      prev.lastPalm = null;
+      prev.swipeStreak = null;
+    } else if (rightClosed) {
+      events.push({ kind: 'pinchDown', button: 'right' });
+      prev.kind = 'PINCH_RIGHT';
+      prev.pinch = {
+        button: 'right',
+        downAt: { x: pointer.x, y: pointer.y },
+        maxTravel: 0,
+        downTs: hand.ts,
+      };
+      prev.lastPalm = null;
+      prev.swipeStreak = null;
+    } else if (!isHandOpen(hand)) {
+      prev.kind = 'TRACKING';
+      prev.lastPalm = null;
+      prev.swipeStreak = null;
+      events.push({ kind: 'tracking' });
+    }
   } else {
-    // IDLE or TRACKING: see if a new pinch starts.
+    // IDLE or TRACKING: see if a new pinch / open-palm starts.
     // Tie-break: when both fingers are within the enter threshold on
-    // the same frame, prefer the more-recently-EXTENDED finger — i.e.,
-    // the one that was last seen open. This is the finger the user is
-    // most likely actively closing now.
+    // the same frame, prefer the more-recently-EXTENDED finger.
     const startBoth = leftClosed && rightClosed;
     const preferRight = startBoth && prev.lastMiddleOpenTs > prev.lastIndexOpenTs;
 
@@ -265,6 +321,14 @@ export function step(
         maxTravel: 0,
         downTs: hand.ts,
       };
+    } else if (isHandOpen(hand)) {
+      // All five fingers extended → enter OPEN_PALM. The actual scroll
+      // / swipe events fire from frame N+1 onward when there's a delta
+      // to measure.
+      prev.kind = 'OPEN_PALM';
+      prev.lastPalm = { ...palmCenter(hand), ts: hand.ts };
+      prev.swipeStreak = null;
+      events.push({ kind: 'tracking' });
     } else {
       if (prev.kind !== 'TRACKING') {
         prev.kind = 'TRACKING';
@@ -274,6 +338,58 @@ export function step(
   }
 
   return { state: prev, events, pointer };
+}
+
+function handleOpenPalm(
+  state: FsmState,
+  hand: HandLandmarks,
+  thr: FsmThresholds,
+  events: Gesture[],
+): void {
+  const palm = palmCenter(hand);
+  if (!state.lastPalm) {
+    state.lastPalm = { ...palm, ts: hand.ts };
+    return;
+  }
+
+  const dt = Math.max(1, hand.ts - state.lastPalm.ts);
+  const dx = palm.x - state.lastPalm.x;
+  const dy = palm.y - state.lastPalm.y;
+
+  const minDelta = thr.scrollMinDelta ?? 0.001;
+  const sensitivity = thr.scrollSensitivity ?? 1.0;
+
+  if (Math.abs(dy) > minDelta) {
+    // Positive dy in normalized space = hand moved DOWN = scroll DOWN.
+    // We forward the raw delta scaled by sensitivity; the dispatcher
+    // applies the OS-level scale.
+    events.push({ kind: 'scroll', dx: 0, dy: dy * sensitivity });
+  }
+
+  // Swipe detection: horizontal velocity normalized to frames/second.
+  const vx = dx / (dt / 1000);
+  const swipeMinVelocity = (thr.swipeMinVelocity ?? 0.04) * 60; // norm per second
+  const direction: 'left' | 'right' | null =
+    vx > swipeMinVelocity ? 'right' : vx < -swipeMinVelocity ? 'left' : null;
+  if (direction) {
+    if (state.swipeStreak && state.swipeStreak.direction === direction) {
+      state.swipeStreak.frames++;
+      state.swipeStreak.lastVel = Math.abs(vx);
+    } else {
+      state.swipeStreak = { direction, frames: 1, lastVel: Math.abs(vx) };
+    }
+    const requiredFrames = thr.swipeMinFrames ?? 3;
+    // Emit ONCE per swipe when we hit the frame threshold; don't re-emit
+    // until the streak ends.
+    if (state.swipeStreak.frames === requiredFrames) {
+      events.push({ kind: 'swipe', direction });
+    }
+  } else if (state.swipeStreak) {
+    // Deceleration ends the swipe; reset for next one.
+    state.swipeStreak = null;
+  }
+
+  state.lastPalm = { ...palm, ts: hand.ts };
 }
 
 /** Build a FsmStepResult from the reducer output (used by callers). */

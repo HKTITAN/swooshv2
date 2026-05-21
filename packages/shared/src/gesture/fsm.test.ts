@@ -241,6 +241,73 @@ describe('FSM — tie-breaking (both fingers in range)', () => {
   });
 });
 
+function openPalmHand(
+  ts: number,
+  palm: { x: number; y: number },
+): HandLandmarks {
+  // Build a hand where: (1) thumb+index distance is well above pinch
+  // exit threshold, (2) all four non-thumb fingers are "extended"
+  // (fingertip farther from wrist than MCP). Palm center is the
+  // average of WRIST + 4 MCPs, so we anchor wrist+MCPs around `palm`
+  // and place tips farther out.
+  const points: Landmark[] = Array.from({ length: 21 }, () => ({ x: 0, y: 0, z: 0 }));
+  // Place wrist at palm position
+  points[LANDMARK.WRIST] = { x: palm.x, y: palm.y + 0.1, z: 0 };
+  // MCPs near palm
+  points[LANDMARK.INDEX_MCP] = { x: palm.x - 0.06, y: palm.y, z: 0 };
+  points[LANDMARK.MIDDLE_MCP] = { x: palm.x - 0.02, y: palm.y, z: 0 };
+  points[LANDMARK.RING_MCP] = { x: palm.x + 0.02, y: palm.y, z: 0 };
+  points[LANDMARK.PINKY_MCP] = { x: palm.x + 0.06, y: palm.y, z: 0 };
+  // Tips extended away from wrist (further up in normalized space)
+  points[LANDMARK.INDEX_TIP] = { x: palm.x - 0.06, y: palm.y - 0.2, z: 0 };
+  points[LANDMARK.MIDDLE_TIP] = { x: palm.x - 0.02, y: palm.y - 0.22, z: 0 };
+  points[LANDMARK.RING_TIP] = { x: palm.x + 0.02, y: palm.y - 0.2, z: 0 };
+  points[LANDMARK.PINKY_TIP] = { x: palm.x + 0.06, y: palm.y - 0.18, z: 0 };
+  // Thumb open (far from index)
+  points[LANDMARK.THUMB_TIP] = { x: palm.x - 0.2, y: palm.y - 0.05, z: 0 };
+  return { points, handedness: 'Right', score: 0.95, ts };
+}
+
+describe('FSM — open palm scroll + swipe', () => {
+  it('enters OPEN_PALM when all fingers extended', () => {
+    const s = createFsmState(DEFAULT_THR);
+    step(s, [openPalmHand(0, { x: 0.5, y: 0.5 })], DEFAULT_THR);
+    expect(s.kind).toBe('OPEN_PALM');
+  });
+
+  it('emits scroll events when palm moves down', () => {
+    const s = createFsmState(DEFAULT_THR);
+    step(s, [openPalmHand(0, { x: 0.5, y: 0.5 })], DEFAULT_THR);
+    const out = step(s, [openPalmHand(16, { x: 0.5, y: 0.6 })], DEFAULT_THR);
+    const scroll = out.events.find((e) => e.kind === 'scroll');
+    expect(scroll).toBeDefined();
+    if (scroll && scroll.kind === 'scroll') {
+      expect(scroll.dy).toBeGreaterThan(0);
+    }
+  });
+
+  it('emits swipe right after sustained horizontal motion', () => {
+    const s = createFsmState(DEFAULT_THR);
+    step(s, [openPalmHand(0, { x: 0.3, y: 0.5 })], DEFAULT_THR);
+    // 3 consecutive fast rightward frames @ 60 fps.
+    step(s, [openPalmHand(16, { x: 0.35, y: 0.5 })], DEFAULT_THR);
+    step(s, [openPalmHand(32, { x: 0.4, y: 0.5 })], DEFAULT_THR);
+    const out = step(s, [openPalmHand(48, { x: 0.45, y: 0.5 })], DEFAULT_THR);
+    const swipe = out.events.find((e) => e.kind === 'swipe');
+    expect(swipe).toBeDefined();
+    if (swipe && swipe.kind === 'swipe') expect(swipe.direction).toBe('right');
+  });
+
+  it('exits OPEN_PALM when the hand closes', () => {
+    const s = createFsmState(DEFAULT_THR);
+    step(s, [openPalmHand(0, { x: 0.5, y: 0.5 })], DEFAULT_THR);
+    expect(s.kind).toBe('OPEN_PALM');
+    // Close into a left pinch
+    step(s, [handWithPinchDistance(0.03, { ts: 16 })], DEFAULT_THR);
+    expect(s.kind).toBe('PINCH_LEFT');
+  });
+});
+
 describe('FSM — losing the hand', () => {
   it('emits pinchUp + idle when hand disappears mid-pinch', () => {
     const s = createFsmState(DEFAULT_THR);
