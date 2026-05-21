@@ -6,7 +6,8 @@
  *    racing for the camera or registering duplicate global shortcuts).
  *  - Wait for app.whenReady() then bootstrap:
  *      - logger / settings store / IPC handlers / OS hooks
- *      - input dispatcher (nut.js)
+ *      - input dispatcher (nut.js) + gesture router
+ *      - tracking controller (state + hotkey + auto-pause)
  *      - tray + initial window (tutorial if first-run, otherwise overlay)
  *  - Clean up on will-quit: stop OS hooks, unregister shortcuts,
  *    release any cached handles.
@@ -22,11 +23,14 @@ import { logger } from './logger';
 import { createSettingsStore } from './settings/store';
 import { createInputDispatcher } from './input/dispatcher';
 import { createOsHooks } from './input/osHooks';
+import { createGestureRouter } from './input/gestureRouter';
 import { registerIpcHandlers } from './ipc';
 import { closeTutorialWindow, createTutorialWindow } from './windows/tutorial';
+import { createOverlayWindow, closeOverlayWindow } from './windows/overlay';
+import { createTrackingController } from './tracking';
+import { createTray, trayStateFor } from './tray';
 
-// Acquire the single-instance lock immediately. If we don't get it,
-// another Swoosh is already running — focus its window and quit.
+// Acquire the single-instance lock immediately.
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
@@ -48,10 +52,8 @@ if (!gotTheLock) {
     teardown();
   });
 
-  // Hide-on-close: Swoosh is tray-resident. Closing the last window
-  // does NOT quit the app.
   app.on('window-all-closed', () => {
-    // No-op on all platforms.
+    // No-op: Swoosh is tray-resident.
   });
 }
 
@@ -59,6 +61,9 @@ interface AppContext {
   settings: ReturnType<typeof createSettingsStore>;
   input: ReturnType<typeof createInputDispatcher>;
   osHooks: ReturnType<typeof createOsHooks>;
+  router: ReturnType<typeof createGestureRouter>;
+  tracking: ReturnType<typeof createTrackingController>;
+  tray: ReturnType<typeof createTray>;
   disposeIpc: () => void;
 }
 
@@ -75,63 +80,82 @@ function bootstrap(): void {
   const input = createInputDispatcher();
   const osHooks = createOsHooks();
   osHooks.start();
+  const router = createGestureRouter(input);
+  const tracking = createTrackingController({
+    osHooks,
+    router,
+    getSettings: () => settings.get(),
+  });
+  const tray = createTray();
+
+  // Hotkey from settings.
+  tracking.setHotkey(settings.get().hotkeys.pauseResume);
+  settings.on('changed', (s) => {
+    tracking.setHotkey(s.hotkeys.pauseResume);
+  });
+
+  // Tray handlers.
+  tray.setOnPauseResume(() => {
+    if (tracking.getState().kind === 'paused') tracking.resume();
+    else tracking.pause('trayToggle');
+  });
+  tray.setOnOpenSettings(() => {
+    // T500 lands the settings window — for now, log + no-op.
+    logger.info('settings requested from tray (T500 pending)');
+  });
+  tray.setOnReplayTutorial(() => {
+    createTutorialWindow();
+  });
+  tray.setOnQuit(() => {
+    app.quit();
+  });
+  tray.setOnOpenAbout(() => {
+    logger.info('about requested (no-op)');
+  });
 
   const disposeIpc = registerIpcHandlers({
     settings,
-    onQuit: () => app.quit(),
+    onGestureEmit: (payload) => router.handle(payload),
+    onTrackingPause: () => tracking.pause('user'),
+    onTrackingResume: () => tracking.resume(),
+    getTrackingState: () => tracking.getState(),
     onTutorialComplete: () => {
       closeTutorialWindow();
-      openOverlay();
+      createOverlayWindow();
     },
     onTutorialReplay: () => {
       createTutorialWindow();
     },
+    onQuit: () => app.quit(),
   });
 
-  context = { settings, input, osHooks, disposeIpc };
+  context = { settings, input, osHooks, router, tracking, tray, disposeIpc };
+
+  // Mirror tracking state to the tray icon.
+  setInterval(() => {
+    if (!context) return;
+    context.tray.setState(trayStateFor(context.tracking.getState()));
+  }, 1000);
 
   // Decide initial UI: tutorial on first run, otherwise overlay.
   const current = settings.get();
   if (!current.tutorialSeen) {
     createTutorialWindow();
   } else {
-    openOverlay();
+    createOverlayWindow();
   }
 }
 
 function teardown(): void {
   if (!context) return;
   try {
+    context.tracking.dispose();
     context.osHooks.stop();
     context.disposeIpc();
+    context.tray.destroy();
+    closeOverlayWindow();
   } catch (err) {
     logger.error('teardown failed', { err: String(err) });
   }
   context = null;
-}
-
-/**
- * Overlay window — placeholder. Replaced by T200 (proper transparent
- * always-on-top click-through overlay). Until then we open a small
- * status window so the tutorial-completion flow has somewhere to go.
- */
-function openOverlay(): void {
-  const win = new BrowserWindow({
-    width: 480,
-    height: 240,
-    show: true,
-    backgroundColor: '#0E1230',
-    title: 'Swoosh',
-    autoHideMenuBar: true,
-    resizable: false,
-  });
-  win.loadURL(
-    'data:text/html;charset=utf-8,' +
-      encodeURIComponent(
-        '<!doctype html><meta charset="utf-8"><title>Swoosh</title>' +
-          '<body style="background:#0E1230;color:white;font-family:\'Segoe UI\',system-ui;display:grid;place-items:center;height:100vh;margin:0">' +
-          '<div style="text-align:center"><h2 style="margin:0 0 8px">Swoosh is running</h2>' +
-          '<p style="margin:0;color:#A2A9CF">The transparent overlay lands in T200+.</p></div>',
-      ),
-  );
 }

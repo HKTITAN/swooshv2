@@ -115,22 +115,22 @@ description: "Task list for Swoosh MVP — atomic, dependency-ordered, ralph-loo
 
 **Goal**: After tutorial, the user can pinch to click anywhere in the OS.
 
-- [ ] T200 [US2] Implement `apps/desktop/src/main/windows/overlay.ts` — frameless, transparent, always-on-top, click-through (`setIgnoreMouseEvents(true, { forward: true })`), sized to the primary display, repositions on display change
-- [ ] T201 [US2] Implement `apps/desktop/src/renderer/overlay/main.tsx` — mounts `<HandOverlay />` at full window size; starts the pipeline with settings from `window.swoosh.settings.get()`
-- [ ] T202 [US2] Wire `pipeline → window.swoosh.gesture.emit` so every FSM event is forwarded to the main process at frame cadence
-- [ ] T203 [US2] In main, implement gesture → input mapping in `apps/desktop/src/main/input/gestureRouter.ts`:
+- [x] T200 [US2] Implement `apps/desktop/src/main/windows/overlay.ts` — frameless, transparent, always-on-top, click-through (`setIgnoreMouseEvents(true, { forward: true })`), sized to the primary display, repositions on display change
+- [x] T201 [US2] Implement `apps/desktop/src/renderer/overlay/main.tsx` — mounts `<HandOverlay />` at full window size; starts the pipeline with settings from `window.swoosh.settings.get()`
+- [x] T202 [US2] Wire `pipeline → window.swoosh.gesture.emit` so every FSM event is forwarded to the main process at frame cadence
+- [x] T203 [US2] In main, implement gesture → input mapping in `apps/desktop/src/main/input/gestureRouter.ts`:
       - `tracking` → `dispatcher.moveCursor(payload.cursor)`
       - `pinchDown {left}` → `dispatcher.mouseDown('left')` + audio cue
       - `pinchUp {left}` → `dispatcher.mouseUp('left')` + release cue
       - `click {left}` → no-op (mouseDown/Up already fired)
-- [ ] T204 [US2] Cursor coordinate mapping helper `apps/desktop/src/main/input/coords.ts` — converts normalized landmark coordinates to OS pixels using `screen.getCursorScreenPoint()` reference monitor, handling multi-monitor and fractional DPI
-- [ ] T205 [US2] Implement drag-distance heuristic in FSM: if pointer moves > 4 px (logical) between pinchDown and pinchUp, do not emit synthesized `click` (drag-only); covered by existing FSM tests
-- [ ] T206 [P] [US2] Implement `apps/desktop/src/main/tray.ts` — creates `Tray` with state-aware icon (active / paused / no-camera), menu items Pause/Resume, Settings, Replay Tutorial, About, Quit
-- [ ] T207 [US2] Wire global hotkey via `globalShortcut.register` to toggle pause/resume; rebind on settings change
-- [ ] T208 [US2] Recording indicator — small floating red dot in the corner whenever the camera is active, hides on pause
-- [ ] T209 [US2] On lock/sleep/displayOff from `osHooks`, automatically pause; on unlock, resume if was previously active
-- [ ] T210 [US2] Drag-lock safety: if a pinch has been held > 5 s with cursor movement < 8 px total, auto-release and show a transient hint in the overlay
-- [ ] T211 [P] [US2] Manual smoke test checklist file `apps/desktop/tests/manual/us2.md` (open notepad, click menu, drag a file, etc.)
+- [x] T204 [US2] Cursor coordinate mapping helper `apps/desktop/src/main/input/coords.ts` — converts normalized landmark coordinates to OS pixels using `screen.getCursorScreenPoint()` reference monitor, handling multi-monitor and fractional DPI
+- [x] T205 [US2] Implement drag-distance heuristic in FSM: if pointer moves > 4 px (logical) between pinchDown and pinchUp, do not emit synthesized `click` (drag-only); covered by existing FSM tests
+- [x] T206 [P] [US2] Implement `apps/desktop/src/main/tray.ts` — creates `Tray` with state-aware icon (active / paused / no-camera), menu items Pause/Resume, Settings, Replay Tutorial, About, Quit
+- [x] T207 [US2] Wire global hotkey via `globalShortcut.register` to toggle pause/resume; rebind on settings change
+- [x] T208 [US2] Recording indicator — small floating red dot in the corner whenever the camera is active, hides on pause
+- [x] T209 [US2] On lock/sleep/displayOff from `osHooks`, automatically pause; on unlock, resume if was previously active
+- [x] T210 [US2] Drag-lock safety: if a pinch has been held > 5 s with cursor movement < 8 px total, auto-release and show a transient hint in the overlay
+- [x] T211 [P] [US2] Manual smoke test checklist file `apps/desktop/tests/manual/us2.md` (open notepad, click menu, drag a file, etc.)
 
 **Checkpoint**: US1 + US2 = MVP. Tag a release candidate.
 
