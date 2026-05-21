@@ -1,0 +1,109 @@
+/*
+ * Swoosh design tokens + Baloo @font-face + base resets.
+ *
+ * Loaded once per renderer entry (overlay / settings / tutorial /
+ * tray-popover). Tailwind utility classes consume these CSS variables
+ * for any value the design tokens cover; bespoke styles also reach in.
+ *
+ * Typography: Baloo 2 — bold, rounded, playful. Self-hosted (per the
+ * constitution's privacy principle: no Google Fonts at runtime).
+ */
+
+/* Baloo 2 variable font. Replace the binary at the path below with the
+ * actual woff2 download from https://fonts.google.com/specimen/Baloo+2.
+ * See ./fonts/README.md for the licensing note. */
+@font-face {
+  font-family: 'Baloo 2';
+  src: url('./fonts/Baloo2-Variable.woff2') format('woff2-variations'),
+       url('./fonts/Baloo2-Variable.woff2') format('woff2');
+  font-weight: 400 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Design tokens — keep names short and meaningful. Tailwind config
+ * mirrors most of these in `tailwind.config.ts`. */
+:root {
+  /* Surface */
+  --swoosh-ink-950: #070A1B;
+  --swoosh-ink-900: #0E1230;
+  --swoosh-ink-800: #161B45;
+  --swoosh-ink-700: #23295C;
+  --swoosh-ink-600: #3A4280;
+
+  /* Accents */
+  --swoosh-mint:   #3FE0C5;
+  --swoosh-mint-strong: #1FC9AB;
+  --swoosh-flare:  #FF6B9D;
+  --swoosh-sun:    #FFD56B;
+  --swoosh-danger: #FF5C5C;
+
+  /* Text */
+  --swoosh-fg:     #F4F6FF;
+  --swoosh-fg-mute:#A2A9CF;
+  --swoosh-fg-dim: #6F7AAD;
+
+  /* Radii */
+  --swoosh-r-pill: 9999px;
+  --swoosh-r-panel: 24px;
+  --swoosh-r-card: 16px;
+  --swoosh-r-input: 12px;
+
+  /* Elevation / glow */
+  --swoosh-shadow-panel: 0 24px 48px -16px rgba(7, 10, 27, 0.6);
+  --swoosh-shadow-glow:  0 0 32px -8px rgba(63, 224, 197, 0.45);
+
+  /* Motion */
+  --swoosh-ease-out:  cubic-bezier(0.16, 1, 0.3, 1);
+  --swoosh-ease-in:   cubic-bezier(0.7, 0, 0.84, 0);
+  --swoosh-ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Base resets */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: 'Baloo 2', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-weight: 600;
+  font-feature-settings: 'ss01' on, 'cv11' on;
+  color: var(--swoosh-fg);
+  background: var(--swoosh-ink-950);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+a {
+  color: var(--swoosh-mint);
+  text-decoration: none;
+}
+
+/* Respect the user's reduced-motion preference at the platform level.
+ * Our settings panel also exposes a `reducedMotion` toggle for app-wide
+ * control independent of the OS setting. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
