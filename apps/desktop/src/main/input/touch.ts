@@ -132,32 +132,38 @@ $PT_TOUCH       = 2
 # touchMask: CONTACTAREA | ORIENTATION | PRESSURE
 $MASK = 0x07
 
-$frameId = [uint32]1
+# A shared template contact, reused across calls. Microsoft's official
+# TouchInjection sample initializes the struct ONCE with memset(0),
+# only sets the active fields, and re-uses the same instance — only
+# updating pointerFlags between DOWN, UPDATE, and UP. We follow that
+# pattern exactly: dwTime, frameId, ptPixelLocationRaw, rcContactRaw,
+# PerformanceCount, ButtonChangeType all stay at zero. Setting any of
+# them to a non-zero value (e.g., a real GetTickCount) makes Windows
+# return ERROR_INVALID_PARAMETER (87) — discovered the hard way.
+$template = New-Object PointerTouchInfo
+$template.pointerInfo.pointerType = $PT_TOUCH
+$template.pointerInfo.pointerId   = 0
+$template.touchFlags = 0
+$template.touchMask  = $MASK
+$template.orientation = 90
+$template.pressure    = 32000
 $contacts = New-Object 'PointerTouchInfo[]' 1
 
 function Inject([int]$x, [int]$y, [uint32]$flags) {
-    $info = New-Object PointerTouchInfo
-    $info.pointerInfo.pointerType  = $PT_TOUCH
-    $info.pointerInfo.pointerId    = 0
-    $info.pointerInfo.frameId      = $script:frameId
-    $script:frameId = $script:frameId + 1
-    $info.pointerInfo.pointerFlags = $flags
-    $info.pointerInfo.ptPixelLocation    = New-Object POINT
-    $info.pointerInfo.ptPixelLocation.x  = $x
-    $info.pointerInfo.ptPixelLocation.y  = $y
-    $info.pointerInfo.ptPixelLocationRaw = $info.pointerInfo.ptPixelLocation
-    $info.pointerInfo.dwTime       = [TI]::GetTickCount()
-    $info.touchFlags = 0
-    $info.touchMask  = $MASK
-    $info.rcContact   = New-Object RECT
-    $info.rcContact.left   = $x - 2
-    $info.rcContact.top    = $y - 2
-    $info.rcContact.right  = $x + 2
-    $info.rcContact.bottom = $y + 2
-    $info.rcContactRaw = $info.rcContact
-    $info.orientation = 90
-    $info.pressure    = 32000
-    $contacts[0] = $info
+    $c = $template
+    $c.pointerInfo.ptPixelLocation = New-Object POINT
+    $c.pointerInfo.ptPixelLocation.x = $x
+    $c.pointerInfo.ptPixelLocation.y = $y
+    $c.pointerInfo.pointerFlags = $flags
+    $c.rcContact = New-Object RECT
+    $c.rcContact.left   = $x - 2
+    $c.rcContact.top    = $y - 2
+    $c.rcContact.right  = $x + 2
+    $c.rcContact.bottom = $y + 2
+    # NOTE: ptPixelLocationRaw, ptHimetricLocation*, rcContactRaw,
+    # dwTime, historyCount, inputData, dwKeyStates, performanceCount,
+    # buttonChangeType all stay 0 — matches MS sample exactly.
+    $contacts[0] = $c
     if (-not [TI]::InjectTouchInput(1, $contacts)) {
         $e = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
         [Console]::Error.WriteLine("INJ_FAIL $e flags=$flags x=$x y=$y")
@@ -179,7 +185,10 @@ while ($true) {
         $y = [int]$parts[2]
         switch ($cmd) {
             'tap'  {
+                # MS sample sleeps ~10 ms between DOWN and UP so the
+                # OS can sequence the events as a discrete tap.
                 Inject $x $y ($FLAG_DOWN -bor $FLAG_INRANGE -bor $FLAG_INCONTACT)
+                Start-Sleep -Milliseconds 10
                 Inject $x $y $FLAG_UP
             }
             'down' { Inject $x $y ($FLAG_DOWN  -bor $FLAG_INRANGE -bor $FLAG_INCONTACT) }
