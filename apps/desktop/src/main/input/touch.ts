@@ -127,38 +127,67 @@ public static class WIN {
 }
 
 public static class UIA {
+    // Swoosh's own process ID — we skip elements that belong to us
+    // (the overlay window can show up in UIA hit-tests even with
+    // WS_EX_TRANSPARENT in some Windows configurations).
+    public static int SelfPid = System.Diagnostics.Process.GetCurrentProcess().Id;
+    public static int ParentPid = 0;
+
+    static string Describe(AutomationElement elt) {
+        try {
+            return string.Format("pid={0} cls=\"{1}\" type=\"{2}\" name=\"{3}\"",
+                elt.Current.ProcessId,
+                elt.Current.ClassName ?? "",
+                elt.Current.ControlType != null ? elt.Current.ControlType.ProgrammaticName : "",
+                (elt.Current.Name ?? "").Replace('"', '\''));
+        } catch { return "?"; }
+    }
+
     /**
-     * Find the most specific UIA element at the given screen point
-     * and try to activate it. Returns:
-     *   "OK"      — invoked / toggled successfully
-     *   "NOELT"   — no element at that point
-     *   "NOPATTERN" — element found but has no invokable pattern
+     * Get the most specific element at (x, y), but if it belongs to
+     * Swoosh itself (the overlay or any of its windows), walk past it
+     * to the next non-Swoosh element. This is what lets UIA "see
+     * through" our transparent overlay.
      */
+    static AutomationElement FindTarget(System.Windows.Point pt) {
+        var elt = AutomationElement.FromPoint(pt);
+        if (elt == null) return null;
+        // If the hit element is one of our own, walk up to the root
+        // and try the second-best — but UIA doesn't expose a clean
+        // "next-window-down" API. In practice, WS_EX_TRANSPARENT
+        // does keep us out of UIA hit-tests on Win11; this branch
+        // is the safety net.
+        try {
+            int pid = elt.Current.ProcessId;
+            if (pid == SelfPid || pid == ParentPid) {
+                return null; // signal caller to treat as no-elt
+            }
+        } catch { /* fall through */ }
+        return elt;
+    }
+
     public static string Click(int x, int y) {
         try {
             var pt = new System.Windows.Point(x, y);
-            var elt = AutomationElement.FromPoint(pt);
+            var elt = FindTarget(pt);
             if (elt == null) return "NOELT";
+            var desc = Describe(elt);
 
-            // 1. InvokePattern — preferred (buttons, links, menu items).
             object invokeObj;
             if (elt.TryGetCurrentPattern(InvokePattern.Pattern, out invokeObj)) {
                 ((InvokePattern)invokeObj).Invoke();
-                return "OK";
+                return "OK Invoke " + desc;
             }
-            // 2. TogglePattern — checkboxes, toggle buttons.
             object toggleObj;
             if (elt.TryGetCurrentPattern(TogglePattern.Pattern, out toggleObj)) {
                 ((TogglePattern)toggleObj).Toggle();
-                return "OK";
+                return "OK Toggle " + desc;
             }
-            // 3. SelectionItemPattern — list/tree items, tabs, radios.
             object selObj;
             if (elt.TryGetCurrentPattern(SelectionItemPattern.Pattern, out selObj)) {
                 ((SelectionItemPattern)selObj).Select();
-                return "OK";
+                return "OK Select " + desc;
             }
-            // 4. ExpandCollapsePattern — combo boxes, tree nodes.
             object expandObj;
             if (elt.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out expandObj)) {
                 var p = (ExpandCollapsePattern)expandObj;
@@ -166,49 +195,41 @@ public static class UIA {
                     p.Expand();
                 else
                     p.Collapse();
-                return "OK";
+                return "OK Expand " + desc;
             }
-            return "NOPATTERN";
+            return "NOPATTERN " + desc;
         } catch (Exception ex) {
             return "EX:" + ex.Message;
         }
     }
 
-    /** Scroll up one increment on the scrollable element at (x, y). */
     public static string ScrollUp(int x, int y) {
-        return ScrollImpl(x, y, ScrollAmount.SmallDecrement, true);
+        return ScrollImpl(x, y, ScrollAmount.SmallDecrement);
     }
     public static string ScrollDown(int x, int y) {
-        return ScrollImpl(x, y, ScrollAmount.SmallIncrement, true);
+        return ScrollImpl(x, y, ScrollAmount.SmallIncrement);
     }
-    static string ScrollImpl(int x, int y, ScrollAmount amount, bool vertical) {
+    static string ScrollImpl(int x, int y, ScrollAmount amount) {
         try {
             var pt = new System.Windows.Point(x, y);
-            var elt = AutomationElement.FromPoint(pt);
+            var elt = FindTarget(pt);
             if (elt == null) return "NOELT";
+            var leafDesc = Describe(elt);
 
-            // Walk up the tree until we find something scrollable. The
-            // hit element is usually a leaf (text), the scroll container
-            // is one or more parents up.
             var walker = TreeWalker.RawViewWalker;
             var cur = elt;
             while (cur != null) {
                 object scrollObj;
                 if (cur.TryGetCurrentPattern(ScrollPattern.Pattern, out scrollObj)) {
                     var sp = (ScrollPattern)scrollObj;
-                    if (vertical && sp.Current.VerticallyScrollable) {
+                    if (sp.Current.VerticallyScrollable) {
                         sp.Scroll(ScrollAmount.NoAmount, amount);
-                        return "OK";
+                        return "OK Scroll " + Describe(cur);
                     }
-                }
-                object siObj;
-                if (cur.TryGetCurrentPattern(ScrollItemPattern.Pattern, out siObj)) {
-                    ((ScrollItemPattern)siObj).ScrollIntoView();
-                    return "OK";
                 }
                 cur = walker.GetParent(cur);
             }
-            return "NOSCROLL";
+            return "NOSCROLL leaf=" + leafDesc;
         } catch (Exception ex) {
             return "EX:" + ex.Message;
         }
@@ -279,23 +300,24 @@ while ($true) {
             'click' {
                 $x = [int]$parts[1]; $y = [int]$parts[2]
                 $r = [UIA]::Click($x, $y)
-                if ($r -ne 'OK') {
-                    [Console]::Error.WriteLine("UIA_CLICK $r x=$x y=$y")
-                }
+                # Log every result (success or not) so the user can see what UIA found.
+                [Console]::Error.WriteLine("UIA_CLICK $r")
             }
             'scrollUp' {
                 $x = [int]$parts[1]; $y = [int]$parts[2]
                 $r = [UIA]::ScrollUp($x, $y)
-                if ($r -ne 'OK') {
-                    [Console]::Error.WriteLine("UIA_SCROLL $r x=$x y=$y")
-                }
+                [Console]::Error.WriteLine("UIA_SCROLL $r")
             }
             'scrollDown' {
                 $x = [int]$parts[1]; $y = [int]$parts[2]
                 $r = [UIA]::ScrollDown($x, $y)
-                if ($r -ne 'OK') {
-                    [Console]::Error.WriteLine("UIA_SCROLL $r x=$x y=$y")
-                }
+                [Console]::Error.WriteLine("UIA_SCROLL $r")
+            }
+            'parentPid' {
+                # Node sends us its PID so we can ignore elements
+                # owned by the Electron process itself.
+                [UIA]::ParentPid = [int]$parts[1]
+                [Console]::Error.WriteLine("PARENT_PID $([UIA]::ParentPid)")
             }
             'down' { InjectTouch ([int]$parts[1]) ([int]$parts[2]) ($FLAG_DOWN -bor $FLAG_INRANGE -bor $FLAG_INCONTACT) | Out-Null }
             'move' { InjectTouch ([int]$parts[1]) ([int]$parts[2]) ($FLAG_UPDATE -bor $FLAG_INRANGE -bor $FLAG_INCONTACT) | Out-Null }
@@ -344,6 +366,10 @@ export function getTouchInjector(): InputApi {
           if (trimmed === 'READY') {
             ready = true;
             logger.info('input helper ready (UIA primary + touch attempt)');
+            // Tell the helper our own PID so it can skip Swoosh-owned
+            // UIA elements (the overlay window can show up in
+            // FromPoint() hit-tests on some configurations).
+            send(`parentPid ${process.pid}`);
           }
         }
       });
@@ -375,19 +401,31 @@ export function getTouchInjector(): InputApi {
               });
             }
           } else if (t.startsWith('UIA_CLICK')) {
-            // Common case: NOELT (clicked on desktop / non-UIA region)
-            // or NOPATTERN (decorative element). Log throttled.
-            const now = Date.now();
-            if (now - lastErrLog >= 1000) {
-              lastErrLog = now;
-              logger.info('UIA click could not activate element', { line: t });
+            // OK lines are routed at info; failures throttled but
+            // ALSO at info so the user can see what UIA hit.
+            if (t.startsWith('UIA_CLICK OK')) {
+              logger.info('UIA click', { line: t });
+            } else {
+              const now = Date.now();
+              if (now - lastErrLog >= 500) {
+                lastErrLog = now;
+                logger.info('UIA click no-target', { line: t });
+              }
             }
-          } else if (t.startsWith('UIA_SCROLL') || t.startsWith('EX ')) {
-            const now = Date.now();
-            if (now - lastErrLog >= 1000) {
-              lastErrLog = now;
-              logger.info('input helper note', { line: t });
+          } else if (t.startsWith('UIA_SCROLL')) {
+            if (t.startsWith('UIA_SCROLL OK')) {
+              logger.info('UIA scroll', { line: t });
+            } else {
+              const now = Date.now();
+              if (now - lastErrLog >= 500) {
+                lastErrLog = now;
+                logger.info('UIA scroll no-target', { line: t });
+              }
             }
+          } else if (t.startsWith('PARENT_PID')) {
+            logger.info('input helper acknowledged parent pid', { line: t });
+          } else if (t.startsWith('EX ')) {
+            logger.warn('input helper exception', { line: t });
           }
         }
       });
