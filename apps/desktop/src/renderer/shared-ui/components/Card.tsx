@@ -32,7 +32,7 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(function Card(
   return (
     <div ref={ref} className={classes} {...rest}>
       {heading ? (
-        <div className="mb-4 text-lg font-extrabold tracking-wide text-fg">{heading}</div>
+        <h2 className="mb-4 text-lg font-extrabold tracking-wide text-fg">{heading}</h2>
       ) : null}
       {children}
     </div>

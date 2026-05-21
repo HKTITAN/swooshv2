@@ -138,29 +138,32 @@ function TrayPopoverApp() {
       </div>
 
       {/* Shortcuts */}
-      <div className="grid grid-cols-3 gap-2 pt-1">
+      <nav aria-label="Quick actions" className="grid grid-cols-3 gap-2 pt-1">
         <button
           type="button"
-          className="rounded-card bg-ink-800 px-3 py-2 text-xs font-extrabold text-fg-mute hover:bg-ink-700 hover:text-fg"
+          aria-label="Replay the first-run tutorial"
+          className="rounded-card bg-ink-800 px-3 py-2 text-xs font-extrabold text-fg-mute hover:bg-ink-700 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-swoosh-400/50"
           onClick={() => window.swoosh.tutorial.replay()}
         >
           Replay tutorial
         </button>
         <button
           type="button"
-          className="rounded-card bg-ink-800 px-3 py-2 text-xs font-extrabold text-fg-mute hover:bg-ink-700 hover:text-fg"
+          aria-label="Open the settings window"
+          className="rounded-card bg-ink-800 px-3 py-2 text-xs font-extrabold text-fg-mute hover:bg-ink-700 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-swoosh-400/50"
           onClick={() => window.swoosh.window.openSettings()}
         >
           Settings…
         </button>
         <button
           type="button"
-          className="rounded-card bg-ink-800 px-3 py-2 text-xs font-extrabold text-flare-400 hover:bg-flare-500/15"
+          aria-label="Quit Swoosh"
+          className="rounded-card bg-ink-800 px-3 py-2 text-xs font-extrabold text-flare-400 hover:bg-flare-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-flare-500/50"
           onClick={() => window.swoosh.app.quit()}
         >
           Quit
         </button>
-      </div>
+      </nav>
 
       <footer className="mt-auto text-center text-[10px] font-bold text-fg-dim">
         Hand tracking runs entirely on this device.

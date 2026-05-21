@@ -91,6 +91,7 @@ export function SettingsPanel({ settings, onPatch, onAdjustingThreshold }: Props
           <label className="flex flex-col gap-1">
             <span className="text-sm font-bold text-fg-mute">Device</span>
             <select
+              aria-label="Camera device"
               value={settings.cameraId ?? ''}
               onChange={(e) => onPatch({ cameraId: e.target.value || null })}
               className="rounded-input bg-ink-900 px-3 py-2 text-base text-fg outline-none ring-ink-700 focus:ring-2"
@@ -106,6 +107,7 @@ export function SettingsPanel({ settings, onPatch, onAdjustingThreshold }: Props
           <label className="flex flex-col gap-1">
             <span className="text-sm font-bold text-fg-mute">Profile</span>
             <select
+              aria-label="Performance profile"
               value={settings.performanceProfile}
               onChange={(e) =>
                 onPatch({
@@ -227,27 +229,41 @@ export function SettingsPanel({ settings, onPatch, onAdjustingThreshold }: Props
       <Card heading="Appearance" compact>
         <div className="flex flex-col gap-4">
           <div>
-            <div className="mb-2 text-sm font-bold text-fg-mute">Hand outline</div>
-            <div className="flex flex-wrap gap-2">
-              {(['default', 'highContrast', 'minimal'] as const).map((style) => (
-                <button
-                  key={style}
-                  type="button"
-                  onClick={() => onPatch({ outlineStyle: style })}
-                  className={[
-                    'rounded-pill px-4 py-2 text-sm font-extrabold transition-colors',
-                    settings.outlineStyle === style
-                      ? 'bg-swoosh-400 text-ink-950'
-                      : 'bg-ink-700 text-fg hover:bg-ink-600',
-                  ].join(' ')}
-                >
-                  {style === 'default'
+            <div id="outline-style-label" className="mb-2 text-sm font-bold text-fg-mute">
+              Hand outline
+            </div>
+            <div
+              role="radiogroup"
+              aria-labelledby="outline-style-label"
+              className="flex flex-wrap gap-2"
+            >
+              {(['default', 'highContrast', 'minimal'] as const).map((style) => {
+                const selected = settings.outlineStyle === style;
+                const label =
+                  style === 'default'
                     ? 'Default'
                     : style === 'highContrast'
                       ? 'High contrast'
-                      : 'Minimal'}
-                </button>
-              ))}
+                      : 'Minimal';
+                return (
+                  <button
+                    key={style}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => onPatch({ outlineStyle: style })}
+                    className={[
+                      'rounded-pill px-4 py-2 text-sm font-extrabold transition-colors',
+                      'focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-swoosh-400/50',
+                      selected
+                        ? 'bg-swoosh-400 text-ink-950'
+                        : 'bg-ink-700 text-fg hover:bg-ink-600',
+                    ].join(' ')}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
             </div>
           </div>
           <Toggle

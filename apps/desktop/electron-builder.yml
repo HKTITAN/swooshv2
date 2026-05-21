@@ -16,8 +16,8 @@ asarUnpack:
 
 publish:
   provider: github
-  owner: TODO-set-github-owner
-  repo: swoosh
+  owner: HKTITAN
+  repo: swooshv2
 
 win:
   target:
