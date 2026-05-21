@@ -23,6 +23,7 @@ import { createSettingsStore } from './settings/store';
 import { createInputDispatcher } from './input/dispatcher';
 import { createOsHooks } from './input/osHooks';
 import { registerIpcHandlers } from './ipc';
+import { closeTutorialWindow, createTutorialWindow } from './windows/tutorial';
 
 // Acquire the single-instance lock immediately. If we don't get it,
 // another Swoosh is already running — focus its window and quit.
@@ -31,7 +32,6 @@ if (!gotTheLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    // Focus the first visible window if any.
     const wins = BrowserWindow.getAllWindows();
     const target = wins.find((w) => w.isVisible()) ?? wins[0];
     if (target) {
@@ -49,10 +49,9 @@ if (!gotTheLock) {
   });
 
   // Hide-on-close: Swoosh is tray-resident. Closing the last window
-  // does NOT quit the app; the user has to use Quit from the tray.
+  // does NOT quit the app.
   app.on('window-all-closed', () => {
-    // No-op on all platforms (including macOS — we want tray-only after
-    // tutorial completes).
+    // No-op on all platforms.
   });
 }
 
@@ -80,6 +79,13 @@ function bootstrap(): void {
   const disposeIpc = registerIpcHandlers({
     settings,
     onQuit: () => app.quit(),
+    onTutorialComplete: () => {
+      closeTutorialWindow();
+      openOverlay();
+    },
+    onTutorialReplay: () => {
+      createTutorialWindow();
+    },
   });
 
   context = { settings, input, osHooks, disposeIpc };
@@ -87,7 +93,7 @@ function bootstrap(): void {
   // Decide initial UI: tutorial on first run, otherwise overlay.
   const current = settings.get();
   if (!current.tutorialSeen) {
-    openTutorial();
+    createTutorialWindow();
   } else {
     openOverlay();
   }
@@ -105,45 +111,27 @@ function teardown(): void {
 }
 
 /**
- * Placeholder window creators — replaced by T100 (tutorial) and T200
- * (overlay) once those modules exist. They render a minimal HTML
- * payload so the app boots successfully end-to-end even before the
- * real renderers are wired.
+ * Overlay window — placeholder. Replaced by T200 (proper transparent
+ * always-on-top click-through overlay). Until then we open a small
+ * status window so the tutorial-completion flow has somewhere to go.
  */
-function openTutorial(): void {
-  const win = new BrowserWindow({
-    width: 1024,
-    height: 720,
-    show: true,
-    backgroundColor: '#0E1230',
-    title: 'Swoosh — Setup',
-    autoHideMenuBar: true,
-  });
-  win.loadURL(
-    'data:text/html;charset=utf-8,' +
-      encodeURIComponent(
-        '<!doctype html><meta charset="utf-8"><title>Swoosh</title>' +
-          '<body style="background:#0E1230;color:white;font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0">' +
-          '<div><h1>Swoosh — Setup placeholder</h1><p>Tutorial UI lands in T100+.</p></div>',
-      ),
-  );
-}
-
 function openOverlay(): void {
   const win = new BrowserWindow({
-    width: 800,
-    height: 600,
+    width: 480,
+    height: 240,
     show: true,
     backgroundColor: '#0E1230',
-    title: 'Swoosh — Overlay placeholder',
+    title: 'Swoosh',
     autoHideMenuBar: true,
+    resizable: false,
   });
   win.loadURL(
     'data:text/html;charset=utf-8,' +
       encodeURIComponent(
         '<!doctype html><meta charset="utf-8"><title>Swoosh</title>' +
-          '<body style="background:#0E1230;color:white;font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0">' +
-          '<div><h1>Swoosh — Overlay placeholder</h1><p>Real overlay lands in T200+.</p></div>',
+          '<body style="background:#0E1230;color:white;font-family:\'Segoe UI\',system-ui;display:grid;place-items:center;height:100vh;margin:0">' +
+          '<div style="text-align:center"><h2 style="margin:0 0 8px">Swoosh is running</h2>' +
+          '<p style="margin:0;color:#A2A9CF">The transparent overlay lands in T200+.</p></div>',
       ),
   );
 }

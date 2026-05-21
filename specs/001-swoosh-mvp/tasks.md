@@ -95,16 +95,17 @@ description: "Task list for Swoosh MVP — atomic, dependency-ordered, ralph-loo
 
 **Independent test**: Fresh install → tutorial walks through permission → camera pick → hand framing → pinch-click on tutorial target → tutorial closes leaving Swoosh tray-resident.
 
-- [ ] T100 [US1] Implement `apps/desktop/src/main/windows/tutorial.ts` — creates a 1024×720 centered window with the playful theme, loads the tutorial renderer entry
-- [ ] T101 [US1] Implement `apps/desktop/src/renderer/tutorial/main.tsx` mounting `<TutorialShell />` with route per step
-- [ ] T102 [US1] Implement `<TutorialShell />` — step indicator (5 dots), back/next buttons disabled until step requirements met, framer-motion transitions
-- [ ] T103 [P] [US1] Implement step `Welcome.tsx` — title "Hi, I'm Swoosh.", subtitle, "Let's go" button, Baloo extrabold heading, animated hand illustration
-- [ ] T104 [US1] Implement step `Permission.tsx` — requests `navigator.permissions.query({ name: "camera" })`, shows OS-specific guidance if denied, "Grant access" button triggers `getUserMedia` to surface OS prompt
-- [ ] T105 [US1] Implement step `CameraPick.tsx` — calls `window.swoosh.camera.list()`, renders a card per camera with live thumbnail (each card spins up a short-lived MediaStream), selecting persists to settings
-- [ ] T106 [US1] Implement step `HandFraming.tsx` — runs the pipeline against the chosen camera, shows the hand overlay full-window, displays a "Nice — I can see your hand!" success banner once a hand is detected with score ≥ 0.7 for ≥ 30 frames
-- [ ] T107 [US1] Implement step `FirstClick.tsx` — displays a pulsing target on screen; succeeds when the FSM emits a `click { left }` whose pointer lands within the target's bounds; shows celebratory animation on success
-- [ ] T108 [US1] Wire tutorial completion: on `FirstClick` success, set `settings.tutorialSeen = true`, close tutorial window, open overlay window, register tray icon
+- [x] T100 [US1] Implement `apps/desktop/src/main/windows/tutorial.ts` — creates a 1024×720 centered window with the playful theme, loads the tutorial renderer entry
+- [x] T101 [US1] Implement `apps/desktop/src/renderer/tutorial/main.tsx` mounting `<TutorialShell />` with route per step
+- [x] T102 [US1] Implement `<TutorialShell />` — step indicator (5 dots), back/next buttons disabled until step requirements met, framer-motion transitions
+- [x] T103 [P] [US1] Implement step `Welcome.tsx` — title "Hi, I'm Swoosh.", subtitle, "Let's go" button, Baloo extrabold heading, animated hand illustration
+- [x] T104 [US1] Implement step `Permission.tsx` — requests `navigator.permissions.query({ name: "camera" })`, shows OS-specific guidance if denied, "Grant access" button triggers `getUserMedia` to surface OS prompt
+- [x] T105 [US1] Implement step `CameraPick.tsx` — calls `window.swoosh.camera.list()`, renders a card per camera with live thumbnail (each card spins up a short-lived MediaStream), selecting persists to settings
+- [x] T106 [US1] Implement step `HandFraming.tsx` — runs the pipeline against the chosen camera, shows the hand overlay full-window, displays a "Nice — I can see your hand!" success banner once a hand is detected with score ≥ 0.7 for ≥ 30 frames
+- [x] T107 [US1] Implement step `FirstClick.tsx` — displays a pulsing target on screen; succeeds when the FSM emits a `click { left }` whose pointer lands within the target's bounds; shows celebratory animation on success
+- [x] T108 [US1] Wire tutorial completion: on `FirstClick` success, set `settings.tutorialSeen = true`, close tutorial window, open overlay window, register tray icon
 - [ ] T109 [P] [US1] e2e test `tutorial.spec.ts` — uses Playwright to drive the tutorial end-to-end with a stubbed camera feeding pre-recorded landmark sequences
+> blocked: needs Playwright Electron config + browser install + stubbed camera fixtures; deferred to polish phase along with T081.
 
 **Checkpoint**: US1 demoable. Stop here for MVP demo if needed.
 
