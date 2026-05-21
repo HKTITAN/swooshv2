@@ -71,13 +71,13 @@ description: "Task list for Swoosh MVP — atomic, dependency-ordered, ralph-loo
 
 ### Audio engine
 
-- [ ] T060 Implement `apps/desktop/src/renderer/shared/audio.ts` — Web Audio API synth that plays a pinch tone (440 Hz), right-pinch tone (330 Hz), and release tone (550 Hz); respects `audioEnabled` and `audioVolume` from settings
+- [x] T060 Implement `apps/desktop/src/renderer/shared/audio.ts` — Web Audio API synth that plays a pinch tone (440 Hz), right-pinch tone (330 Hz), and release tone (550 Hz); respects `audioEnabled` and `audioVolume` from settings
 
 ### Camera + tracking pipeline (used by overlay and settings preview)
 
-- [ ] T070 Implement `apps/desktop/src/renderer/shared/camera/stream.ts` — opens `getUserMedia({ video: { deviceId, width, height, frameRate } })`, exposes `start/stop/replaceDevice`, handles permission and in-use errors with typed results
-- [ ] T071 [P] Implement `apps/desktop/src/renderer/shared/camera/landmarker.ts` — wraps `@mediapipe/tasks-vision` HandLandmarker; lazy-loads WASM, runs detection on each `requestVideoFrameCallback` tick, emits `HandLandmarks[]`
-- [ ] T072 Implement `apps/desktop/src/renderer/shared/pipeline.ts` — wires camera → landmarker → 1-Euro filter → FSM → emit; exposes `start(settings)` and `setSettings(patch)`
+- [x] T070 Implement `apps/desktop/src/renderer/shared/camera/stream.ts` — opens `getUserMedia({ video: { deviceId, width, height, frameRate } })`, exposes `start/stop/replaceDevice`, handles permission and in-use errors with typed results
+- [x] T071 [P] Implement `apps/desktop/src/renderer/shared/camera/landmarker.ts` — wraps `@mediapipe/tasks-vision` HandLandmarker; lazy-loads WASM, runs detection on each `requestVideoFrameCallback` tick, emits `HandLandmarks[]`
+- [x] T072 Implement `apps/desktop/src/renderer/shared/pipeline.ts` — wires camera → landmarker → 1-Euro filter → FSM → emit; exposes `start(settings)` and `setSettings(patch)`
 
 ### Hand overlay renderer
 
