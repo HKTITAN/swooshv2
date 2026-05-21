@@ -85,6 +85,62 @@ function CameraLostToast({ visible }: { visible: boolean }) {
 }
 
 /**
+ * SwooshCursor — the visible, hand-driven pointer that lives in the
+ * overlay window. This is Swoosh's OWN input channel; the OS mouse
+ * cursor is left alone unless a gesture event needs to act on the
+ * screen (pinch click, scroll, drag).
+ *
+ * Visual: a 28 px translucent ring with a smaller filled dot at its
+ * center. The dot pulses on pinch as gestural feedback.
+ *
+ * Position is in normalized camera coords; we mirror x by default to
+ * match the selfie-style hand overlay.
+ */
+interface SwooshCursorProps {
+  pos: { x: number; y: number } | null;
+  pinching: boolean;
+  hidden: boolean;
+  mirror?: boolean;
+}
+function SwooshCursor({ pos, pinching, hidden, mirror = true }: SwooshCursorProps) {
+  if (!pos || hidden) return null;
+  const x = mirror ? 1 - pos.x : pos.x;
+  return (
+    <div
+      aria-hidden
+      className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2"
+      style={{
+        left: `${x * 100}%`,
+        top: `${pos.y * 100}%`,
+      }}
+    >
+      <div
+        className={[
+          'relative flex h-7 w-7 items-center justify-center rounded-full transition-transform duration-100',
+          pinching ? 'scale-110' : 'scale-100',
+        ].join(' ')}
+      >
+        {/* Outer ring */}
+        <div
+          className={[
+            'absolute inset-0 rounded-full border-2 transition-colors',
+            pinching ? 'border-sun-500' : 'border-swoosh-400',
+          ].join(' ')}
+          style={{ boxShadow: '0 0 18px -4px rgba(63, 224, 197, 0.65)' }}
+        />
+        {/* Inner dot */}
+        <div
+          className={[
+            'h-2.5 w-2.5 rounded-full transition-colors',
+            pinching ? 'bg-sun-500' : 'bg-swoosh-400',
+          ].join(' ')}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
  * Two-hand resize indicator (T603): a dashed line between the two
  * pinch points + an "↔ Resize ×N.NN" badge near the midpoint. Only
  * renders while the FSM is in TWO_HAND_RESIZE.
@@ -157,6 +213,11 @@ function OverlayApp() {
   const goodLightFramesRef = useRef(0);
   // Camera-lost state (T1004) — surfaced via onCameraError + track.ended.
   const [cameraLost, setCameraLost] = useState(false);
+  // Swoosh's own cursor — tracked independently of the OS mouse so the
+  // user's hand input doesn't shadow their physical mouse.
+  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
+  const [pinching, setPinching] = useState(false);
+  const [handVisible, setHandVisible] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -178,6 +239,7 @@ function OverlayApp() {
         onLandmarks: (h) => {
           if (cancelled) return;
           setHands(h);
+          setHandVisible(h.length > 0);
           // Track confidence for the low-light hint. We require ~90
           // consecutive low-confidence frames (~3 s at 30 FPS) to
           // surface the hint, and ~30 good frames to clear it. Hands
@@ -227,10 +289,15 @@ function OverlayApp() {
         onEmit: (payload: GestureEmitPayload) => {
           // Forward every FSM event to main (T202).
           window.swoosh.gesture.emit(payload);
-          // Drive the resize indicator UI from the same event stream
-          // (T603). The FSM is the source of truth for whether we're
-          // in the two-hand state.
+          // Drive Swoosh's own cursor + pinch indicator from the same
+          // stream. The cursor reflects the FSM's smoothed pointer in
+          // normalized camera coords; the SwooshCursor component
+          // mirrors and positions it inside the overlay.
+          setCursorPos(payload.cursor);
           const g = payload.gesture;
+          if (g.kind === 'pinchDown') setPinching(true);
+          else if (g.kind === 'pinchUp' || g.kind === 'idle') setPinching(false);
+          // Two-hand resize indicator (T603).
           if (g.kind === 'twoHandResizeStart') {
             setResizing(true);
             setResizeScale(1);
@@ -298,6 +365,12 @@ function OverlayApp() {
         landmarks={hands}
         style={settings?.outlineStyle ?? 'default'}
         pinchGlow
+        mirror
+      />
+      <SwooshCursor
+        pos={cursorPos}
+        pinching={pinching}
+        hidden={!active || !handVisible || cameraLost || resizing}
         mirror
       />
       <RecordingIndicator visible={active} />
