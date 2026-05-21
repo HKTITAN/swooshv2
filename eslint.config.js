@@ -15,6 +15,7 @@ export default [
       '**/release/**',
       '**/.vite/**',
       '**/build/**',
+      '**/public/**',
       'pnpm-lock.yaml',
     ],
   },

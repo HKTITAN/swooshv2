@@ -13,6 +13,7 @@ import { createRoot } from 'react-dom/client';
 import { StrictMode, useEffect, useRef, useState } from 'react';
 import { HandOverlay } from '../shared/HandOverlay';
 import { createPipeline, type Pipeline } from '../shared/pipeline';
+import { HAND_LANDMARKER_MODEL_URL, MEDIAPIPE_WASM_URL } from '../shared/mediapipeAssets';
 import type { HandLandmarks } from '@swoosh/shared/types';
 import { LANDMARK } from '@swoosh/shared/types';
 import type { GestureEmitPayload, UserSettings } from '@swoosh/shared/ipc';
@@ -68,13 +69,8 @@ function OverlayApp() {
       const video = videoRef.current;
       if (!video) return;
       const pipeline = createPipeline({
-        // MediaPipe WASM is loaded from the official CDN at the version
-        // pinned in package.json. Once T800 lands offline benchmark
-        // support we'll switch to a local copy under resources/.
-        wasmBaseUrl:
-          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm',
-        modelAssetUrl:
-          'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+        wasmBaseUrl: MEDIAPIPE_WASM_URL,
+        modelAssetUrl: HAND_LANDMARKER_MODEL_URL,
       });
       pipeline.attachVideo(video);
       pipelineRef.current = pipeline;

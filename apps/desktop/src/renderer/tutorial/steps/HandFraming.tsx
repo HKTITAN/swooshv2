@@ -16,6 +16,10 @@ import { HandOverlay } from '../../shared/HandOverlay';
 import type { HandLandmarks } from '@swoosh/shared/types';
 import type { UserSettings } from '@swoosh/shared/ipc';
 import { createPipeline } from '../../shared/pipeline';
+import {
+  HAND_LANDMARKER_MODEL_URL,
+  MEDIAPIPE_WASM_URL,
+} from '../../shared/mediapipeAssets';
 import { Card } from '../../shared-ui/components/Card';
 
 const SUCCESS_FRAMES = 30;
@@ -35,13 +39,9 @@ export function HandFraming({ ctx }: { ctx: TutorialContext }) {
     const video = videoRef.current;
     if (!video) return;
 
-    // Asset URLs — in dev/build, electron-vite serves these from
-    // node_modules. The pipeline lazy-loads them on init().
     const pipeline = createPipeline({
-      wasmBaseUrl:
-        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm',
-      modelAssetUrl:
-        'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+      wasmBaseUrl: MEDIAPIPE_WASM_URL,
+      modelAssetUrl: HAND_LANDMARKER_MODEL_URL,
     });
     pipeline.attachVideo(video);
 
