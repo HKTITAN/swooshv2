@@ -18,6 +18,10 @@
       "types": "./src/types.ts",
       "import": "./src/types.ts"
     },
+    "./settings.schema": {
+      "types": "./src/settings.schema.ts",
+      "import": "./src/settings.schema.ts"
+    },
     "./gesture/*": {
       "types": "./src/gesture/*.ts",
       "import": "./src/gesture/*.ts"
