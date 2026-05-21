@@ -29,7 +29,7 @@ description: "Task list for Swoosh MVP — atomic, dependency-ordered, ralph-loo
 - [x] T010 [P] Add Baloo 2 woff2 placeholder under `apps/desktop/src/renderer/shared-ui/fonts/` (README + OFL note; actual font binary still to be dropped). The `@font-face` declaration lives in `theme.css` (added in T050).
 - [x] T011 [P] Add root npm scripts: `dev`, `build`, `test`, `test:e2e`, `lint`, `package`, `package:all`
 - [x] T012 [P] Add ESLint flat config with @typescript-eslint, react, react-hooks, and Prettier integration
-- [ ] T013 Install dependencies (`pnpm install`) and verify `pnpm run lint` passes on the empty scaffold
+- [x] T013 Install dependencies (`pnpm install`) and verify `pnpm run lint` passes on the empty scaffold
 
 ## Phase 2 — Foundational
 
