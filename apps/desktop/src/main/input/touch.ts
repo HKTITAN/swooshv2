@@ -1,122 +1,46 @@
 /**
- * Windows synthetic touch injection — true multi-input.
+ * Windows synthetic touch injection via a PowerShell child process.
  *
- * Calls user32.dll's `InitializeTouchInjection` + `InjectTouchInput`
- * directly via koffi so Swoosh can fire taps / drags / pans at
- * arbitrary screen coordinates WITHOUT moving the OS mouse cursor.
- * The OS treats touch and mouse as separate input devices; modern
- * apps (browsers, Office, Electron, UWP) handle touch natively, and
- * older apps get automatic touch → mouse promotion from Windows
- * without the cursor being yanked from the user's physical mouse.
+ * After exhausting koffi-based FFI (struct layout was provably
+ * correct down to the bit but Windows kept returning 87 — likely a
+ * subtle marshaling issue around the mixed 4/8-byte fields in
+ * POINTER_INFO), we switched to PowerShell as the touch backend.
  *
- * Implementation note: we pack POINTER_TOUCH_INFO into a raw Buffer
- * by hand rather than relying on koffi's struct marshaling. The Win32
- * struct has mixed 4 / 8-byte fields (pointers, UINT64 PerformanceCount,
- * trailing 4-byte enum) and any subtle padding mismatch causes
- * InjectTouchInput to return ERROR_INVALID_PARAMETER (87) with no
- * indication of which field was wrong. Manual byte layout matches the
- * Windows headers exactly, removing that whole class of bug.
+ * Why PowerShell:
+ *   - It's built into every Windows install (5.1+ since Win10).
+ *   - PowerShell uses .NET's mature P/Invoke marshaling — 20+ years
+ *     of battle-tested struct layout handling, the same plumbing
+ *     Microsoft's own UWP touch samples use under the hood.
+ *   - No native build step, no extra binary to bundle.
  *
- * Privilege note: `InjectTouchInput` will not deliver events to
- * higher-integrity-level windows (e.g., elevated Task Manager) unless
- * the calling process has UIAccess. Same-integrity apps (everything
- * a normal user clicks on) work fine without elevation.
+ * How it works:
+ *   - On first call, we spawn `powershell.exe` with an inline script
+ *     that uses Add-Type to compile a tiny C# class wrapping
+ *     `InitializeTouchInjection` + `InjectTouchInput`.
+ *   - Once the script prints `READY` on stdout, the helper is alive.
+ *   - We send commands like "tap 500 300", "down 500 300",
+ *     "move 510 305", "up 510 305" to its stdin. The helper executes
+ *     them and writes back "OK" or "ERR <code>".
+ *   - We don't await responses for performance — just fire commands
+ *     and move on. The helper logs failures to its stderr which we
+ *     forward to our log.
  *
- * On non-Windows platforms `touch.available` is false; callers fall
- * back to the mouse-with-restore path. macOS / Linux equivalents
- * (`CGEvent` + trackpad source, uinput) are tracked separately.
+ * The OS mouse cursor is NEVER touched. If the helper fails to start
+ * or `InitializeTouchInjection` fails, all hand-driven actions are
+ * dropped — the cursor still stays put, the user can still use their
+ * mouse normally.
  */
 
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { logger } from '../logger';
 
 const isWindows = process.platform === 'win32';
 
-// Pointer flag bits — see Windows.h. Matches Microsoft's official
-// TouchInjection sample at:
-// https://github.com/microsoft/Windows-classic-samples/.../Touchinjection.cpp
-const POINTER_FLAG_INRANGE = 0x00000002;
-const POINTER_FLAG_INCONTACT = 0x00000004;
-const POINTER_FLAG_DOWN = 0x00010000;
-const POINTER_FLAG_UPDATE = 0x00020000;
-const POINTER_FLAG_UP = 0x00040000;
-
-// POINTER_BUTTON_CHANGE_TYPE enum values. Set on the packet to tell
-// Windows which button changed state for this event. Optional for
-// touch per the docs but some kernel paths validate it.
-const POINTER_CHANGE_NONE = 0;
-const POINTER_CHANGE_FIRSTBUTTON_DOWN = 1;
-const POINTER_CHANGE_FIRSTBUTTON_UP = 2;
-
-// PT_TOUCH discriminator for the POINTER_INFO union.
-const PT_TOUCH = 0x00000002;
-
-// Touch feedback modes:
-//   DEFAULT  = 0x1  — Windows draws its small ripple at the touch point
-//   INDIRECT = 0x2  — feedback only on indirect (touchpad-style) input
-//   NONE     = 0x3  — no ripple. REQUIRES UIAccess privilege; without
-//                     it InitializeTouchInjection still succeeds but
-//                     subsequent InjectTouchInput calls fail with
-//                     ERROR_INVALID_PARAMETER (87). Discovered the
-//                     hard way after exhausting every other lead.
-// We use DEFAULT so injection actually works on a normal user app.
-// The small system ripple is acceptable — it's not unlike Quest's
-// visual confirmation. Our own SwooshCursor renders on top anyway.
-const TOUCH_FEEDBACK_DEFAULT = 0x1;
-
-// touchMask declares which auxiliary fields are valid. Must match
-// exactly which fields the packet populates, or Windows returns
-// ERROR_INVALID_PARAMETER.
-const TOUCH_MASK_CONTACTAREA = 0x00000001;
-const TOUCH_MASK_ORIENTATION = 0x00000002;
-const TOUCH_MASK_PRESSURE = 0x00000004;
-const TOUCH_FLAG_NONE = 0x0;
-
-const MAX_CONTACTS = 10;
-
-// POINTER_TOUCH_INFO byte layout on x64. Field offsets are absolute
-// from the start of the struct; total size is 144 bytes.
-//
-//   Offset  Size  Field
-//   ------  ----  ------------------------------------------
-//        0    4   pointerInfo.pointerType (POINTER_INPUT_TYPE enum = int32)
-//        4    4   pointerInfo.pointerId
-//        8    4   pointerInfo.frameId
-//       12    4   pointerInfo.pointerFlags
-//       16    8   pointerInfo.sourceDevice (HANDLE on x64)
-//       24    8   pointerInfo.hwndTarget   (HWND on x64)
-//       32    8   pointerInfo.ptPixelLocation       (POINT = 2 × int32)
-//       40    8   pointerInfo.ptPixelLocationRaw    (POINT)
-//       48    8   pointerInfo.ptHimetricLocation    (POINT)
-//       56    8   pointerInfo.ptHimetricLocationRaw (POINT)
-//       64    4   pointerInfo.dwTime
-//       68    4   pointerInfo.historyCount
-//       72    4   pointerInfo.inputData
-//       76    4   pointerInfo.dwKeyStates
-//       80    8   pointerInfo.performanceCount (UINT64, needs 8-byte aligned — 80 is ✓)
-//       88    4   pointerInfo.buttonChangeType (enum = int32)
-//       92    4   (trailing padding so POINTER_INFO is 96 bytes total)
-//       96    4   touchFlags
-//      100    4   touchMask
-//      104   16   rcContact (RECT = 4 × int32)
-//      120   16   rcContactRaw
-//      136    4   orientation
-//      140    4   pressure
-//      ====  144 bytes
-const POINTER_TOUCH_INFO_SIZE = 144;
-
 interface TouchApi {
   available: boolean;
-  /**
-   * Fire a one-shot tap at the given screen pixel position. Returns
-   * false if injection failed and the caller should fall back to
-   * mouse input.
-   */
   tap(x: number, y: number): boolean;
-  /** Begin a sustained touch contact (drag / pan). */
   pressDown(x: number, y: number): boolean;
-  /** Update the contact's position (continues a drag). */
   pressMove(x: number, y: number): boolean;
-  /** End the contact. */
   pressUp(x: number, y: number): boolean;
 }
 
@@ -128,80 +52,145 @@ const unavailable: TouchApi = {
   pressUp: () => false,
 };
 
-// Monotonically increasing frame id for every packet we send. Windows
-// rejects packets with dwTime == 0 AND PerformanceCount == 0; it also
-// expects successive frames to have monotonically advancing time.
-let nextFrameId = 1;
-// kernel32!GetTickCount, set in getTouchInjector(). Returns ms since
-// system boot — what Windows wants for dwTime. Falling back to
-// Date.now() if for some reason it isn't loaded.
-let nativeGetTickCount: (() => number) | null = null;
-function nextTick(): number {
-  if (nativeGetTickCount) return nativeGetTickCount() >>> 0;
-  return Date.now() >>> 0;
+// PowerShell script — compiles a tiny C# class via Add-Type, calls
+// InitializeTouchInjection, then loops reading commands from stdin.
+// The C# struct layout uses [StructLayout(LayoutKind.Sequential)]
+// which leverages .NET's mature marshaling rules (the same rules
+// the Windows headers were designed against).
+const POWERSHELL_HELPER_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+[Console]::InputEncoding  = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+$src = @"
+using System;
+using System.Runtime.InteropServices;
+
+[StructLayout(LayoutKind.Sequential)]
+public struct POINT { public int x; public int y; }
+
+[StructLayout(LayoutKind.Sequential)]
+public struct RECT { public int left; public int top; public int right; public int bottom; }
+
+[StructLayout(LayoutKind.Sequential)]
+public struct PointerInfo {
+    public uint pointerType;
+    public uint pointerId;
+    public uint frameId;
+    public uint pointerFlags;
+    public IntPtr sourceDevice;
+    public IntPtr hwndTarget;
+    public POINT ptPixelLocation;
+    public POINT ptPixelLocationRaw;
+    public POINT ptHimetricLocation;
+    public POINT ptHimetricLocationRaw;
+    public uint dwTime;
+    public uint historyCount;
+    public int inputData;
+    public uint dwKeyStates;
+    public ulong performanceCount;
+    public int buttonChangeType;
 }
 
-function packTouchInfo(x: number, y: number, flags: number, pointerId = 0): Buffer {
-  const ix = Math.round(x);
-  const iy = Math.round(y);
-  const buf = Buffer.alloc(POINTER_TOUCH_INFO_SIZE);
-
-  // Map the gesture flag (DOWN / UPDATE / UP) to the matching
-  // POINTER_BUTTON_CHANGE_TYPE enum value. Some kernel paths
-  // validate that this agrees with the flag bits.
-  let buttonChange = POINTER_CHANGE_NONE;
-  if (flags & POINTER_FLAG_DOWN) buttonChange = POINTER_CHANGE_FIRSTBUTTON_DOWN;
-  else if (flags & POINTER_FLAG_UP) buttonChange = POINTER_CHANGE_FIRSTBUTTON_UP;
-
-  // POINTER_INFO (96 bytes including 4-byte trailing pad to 8-align)
-  buf.writeUInt32LE(PT_TOUCH, 0);
-  buf.writeUInt32LE(pointerId, 4);
-  buf.writeUInt32LE(nextFrameId++, 8); // frameId — must vary across frames
-  buf.writeUInt32LE(flags >>> 0, 12);
-  buf.writeBigUInt64LE(0n, 16); // sourceDevice = NULL
-  buf.writeBigUInt64LE(0n, 24); // hwndTarget   = NULL
-  buf.writeInt32LE(ix, 32); // ptPixelLocation.x
-  buf.writeInt32LE(iy, 36); // ptPixelLocation.y
-  buf.writeInt32LE(ix, 40); // ptPixelLocationRaw.x
-  buf.writeInt32LE(iy, 44); // ptPixelLocationRaw.y
-  buf.writeInt32LE(0, 48); // ptHimetricLocation.x
-  buf.writeInt32LE(0, 52); // ptHimetricLocation.y
-  buf.writeInt32LE(0, 56); // ptHimetricLocationRaw.x
-  buf.writeInt32LE(0, 60); // ptHimetricLocationRaw.y
-  // dwTime MUST be non-zero (or PerformanceCount must — never both).
-  buf.writeUInt32LE(nextTick(), 64);
-  buf.writeUInt32LE(0, 68); // historyCount
-  buf.writeInt32LE(0, 72); // inputData
-  buf.writeUInt32LE(0, 76); // dwKeyStates
-  buf.writeBigUInt64LE(0n, 80); // performanceCount = 0 (using dwTime instead)
-  buf.writeInt32LE(buttonChange, 88); // buttonChangeType
-  // 92-95: trailing struct padding (already zeroed by Buffer.alloc)
-
-  // POINTER_TOUCH_INFO tail (48 bytes)
-  buf.writeUInt32LE(TOUCH_FLAG_NONE, 96); // touchFlags
-  buf.writeUInt32LE(
-    TOUCH_MASK_CONTACTAREA | TOUCH_MASK_ORIENTATION | TOUCH_MASK_PRESSURE,
-    100,
-  );
-  // rcContact (4 × int32)
-  buf.writeInt32LE(ix - 2, 104);
-  buf.writeInt32LE(iy - 2, 108);
-  buf.writeInt32LE(ix + 2, 112);
-  buf.writeInt32LE(iy + 2, 116);
-  // rcContactRaw (4 × int32)
-  buf.writeInt32LE(ix - 2, 120);
-  buf.writeInt32LE(iy - 2, 124);
-  buf.writeInt32LE(ix + 2, 128);
-  buf.writeInt32LE(iy + 2, 132);
-  buf.writeUInt32LE(90, 136); // orientation — 90° per the MS sample
-  // pressure — Microsoft's official TouchInjection sample uses 32000
-  // even though MSDN documents the range as 0..1024. The sample is
-  // the source of truth here; pressure = 32000 is what's known to
-  // work everywhere.
-  buf.writeUInt32LE(32000, 140);
-
-  return buf;
+[StructLayout(LayoutKind.Sequential)]
+public struct PointerTouchInfo {
+    public PointerInfo pointerInfo;
+    public uint touchFlags;
+    public uint touchMask;
+    public RECT rcContact;
+    public RECT rcContactRaw;
+    public uint orientation;
+    public uint pressure;
 }
+
+public static class TI {
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool InitializeTouchInjection(uint maxCount, uint dwMode);
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool InjectTouchInput(uint count, [In] PointerTouchInfo[] contacts);
+    [DllImport("kernel32.dll")]
+    public static extern uint GetTickCount();
+}
+"@
+
+Add-Type -TypeDefinition $src -Language CSharp
+
+# TOUCH_FEEDBACK_DEFAULT = 1 (does NOT require UIAccess).
+if (-not [TI]::InitializeTouchInjection(10, 1)) {
+    $e = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    [Console]::Error.WriteLine("INIT_FAIL $e")
+    exit 1
+}
+
+# Pointer flag bits from Windows.h.
+$FLAG_INRANGE   = 0x00000002
+$FLAG_INCONTACT = 0x00000004
+$FLAG_DOWN      = 0x00010000
+$FLAG_UPDATE    = 0x00020000
+$FLAG_UP        = 0x00040000
+$PT_TOUCH       = 2
+# touchMask: CONTACTAREA | ORIENTATION | PRESSURE
+$MASK = 0x07
+
+$frameId = [uint32]1
+$contacts = New-Object 'PointerTouchInfo[]' 1
+
+function Inject([int]$x, [int]$y, [uint32]$flags) {
+    $info = New-Object PointerTouchInfo
+    $info.pointerInfo.pointerType  = $PT_TOUCH
+    $info.pointerInfo.pointerId    = 0
+    $info.pointerInfo.frameId      = $script:frameId
+    $script:frameId = $script:frameId + 1
+    $info.pointerInfo.pointerFlags = $flags
+    $info.pointerInfo.ptPixelLocation    = New-Object POINT
+    $info.pointerInfo.ptPixelLocation.x  = $x
+    $info.pointerInfo.ptPixelLocation.y  = $y
+    $info.pointerInfo.ptPixelLocationRaw = $info.pointerInfo.ptPixelLocation
+    $info.pointerInfo.dwTime       = [TI]::GetTickCount()
+    $info.touchFlags = 0
+    $info.touchMask  = $MASK
+    $info.rcContact   = New-Object RECT
+    $info.rcContact.left   = $x - 2
+    $info.rcContact.top    = $y - 2
+    $info.rcContact.right  = $x + 2
+    $info.rcContact.bottom = $y + 2
+    $info.rcContactRaw = $info.rcContact
+    $info.orientation = 90
+    $info.pressure    = 32000
+    $contacts[0] = $info
+    if (-not [TI]::InjectTouchInput(1, $contacts)) {
+        $e = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        [Console]::Error.WriteLine("INJ_FAIL $e flags=$flags x=$x y=$y")
+    }
+}
+
+[Console]::Out.WriteLine("READY")
+[Console]::Out.Flush()
+
+while ($true) {
+    $line = [Console]::In.ReadLine()
+    if ($null -eq $line) { break }
+    if ($line.Length -eq 0) { continue }
+    try {
+        $parts = $line.Split(' ')
+        $cmd = $parts[0]
+        if ($cmd -eq 'quit') { break }
+        $x = [int]$parts[1]
+        $y = [int]$parts[2]
+        switch ($cmd) {
+            'tap'  {
+                Inject $x $y ($FLAG_DOWN -bor $FLAG_INRANGE -bor $FLAG_INCONTACT)
+                Inject $x $y $FLAG_UP
+            }
+            'down' { Inject $x $y ($FLAG_DOWN  -bor $FLAG_INRANGE -bor $FLAG_INCONTACT) }
+            'move' { Inject $x $y ($FLAG_UPDATE -bor $FLAG_INRANGE -bor $FLAG_INCONTACT) }
+            'up'   { Inject $x $y $FLAG_UP }
+        }
+    } catch {
+        [Console]::Error.WriteLine("EX $_")
+    }
+}
+`;
 
 let cached: TouchApi | null = null;
 
@@ -212,154 +201,94 @@ export function getTouchInjector(): TouchApi {
     return cached;
   }
 
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const koffi = require('koffi') as typeof import('koffi');
+  let helper: ChildProcessWithoutNullStreams | null = null;
+  let ready = false;
+  let initFailed = false;
 
-    const user32 = koffi.load('user32.dll');
-    const kernel32 = koffi.load('kernel32.dll');
+  function start(): void {
+    try {
+      helper = spawn(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', POWERSHELL_HELPER_SCRIPT],
+        { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
+      );
 
-    // BOOL InitializeTouchInjection(UINT32 maxCount, DWORD dwMode);
-    const InitializeTouchInjection = user32.func(
-      '__stdcall',
-      'InitializeTouchInjection',
-      'int32',
-      ['uint32', 'uint32'],
-    );
-    // BOOL InjectTouchInput(UINT32 count, const POINTER_TOUCH_INFO *contacts);
-    // We declare contacts as void* and pass a hand-packed Buffer to
-    // eliminate any chance of koffi struct-padding bugs. The
-    // { errno: true } option tells koffi to capture GetLastError
-    // IMMEDIATELY after the call — without it, intervening koffi
-    // calls can reset the thread's last-error value, giving us a
-    // misleading code (every call returns 87 even when the real
-    // problem is something else).
-    const InjectTouchInput = user32.func(
-      '__stdcall',
-      'InjectTouchInput',
-      'int32',
-      ['uint32', 'void*'],
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ) as ((...args: unknown[]) => number) & { errno?: () => number };
-    const GetLastError = kernel32.func(
-      '__stdcall',
-      'GetLastError',
-      'uint32',
-      [],
-    );
-    // DWORD GetTickCount(void) — system uptime in ms. Windows expects
-    // POINTER_INFO.dwTime to be a real tick value, not an arbitrary
-    // counter. The two were drifting apart with our Date.now()-epoch
-    // approach and Windows rejected the packet as "in the past".
-    const GetTickCount = kernel32.func(
-      '__stdcall',
-      'GetTickCount',
-      'uint32',
-      [],
-    );
-    // Expose to the packer below.
-    nativeGetTickCount = GetTickCount;
+      helper.stdout.setEncoding('utf8');
+      helper.stderr.setEncoding('utf8');
 
-    const initOk = InitializeTouchInjection(MAX_CONTACTS, TOUCH_FEEDBACK_DEFAULT);
-    if (!initOk) {
-      const err = GetLastError();
-      logger.warn('InitializeTouchInjection returned 0 — falling back to mouse', {
-        lastError: err,
-      });
-      cached = unavailable;
-      return cached;
-    }
-
-    // One-time sanity log — confirms our hand-packed struct size matches
-    // what Windows expects (144 bytes for POINTER_TOUCH_INFO on x64).
-    logger.info('touch injection initialized', {
-      maxContacts: MAX_CONTACTS,
-      packetBytes: POINTER_TOUCH_INFO_SIZE,
-    });
-
-    let lastInjectErrLog = 0;
-    let dumpedHex = false;
-    function inject(buf: Buffer): boolean {
-      try {
-        const ok = InjectTouchInput(1, buf);
-        if (ok === 0) {
-          // Capture errno BEFORE any other koffi work so we get the
-          // actual Win32 error from InjectTouchInput, not a stale
-          // value reset by an intervening call.
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const koffiErrno = (koffi as any).errno?.() as number | undefined;
-          const winLastError = GetLastError();
-          const now = Date.now();
-          if (now - lastInjectErrLog > 1000) {
-            lastInjectErrLog = now;
-            logger.warn('InjectTouchInput returned 0', {
-              koffiErrno: koffiErrno ?? null,
-              winLastError,
-              flags: buf.readUInt32LE(12),
-              x: buf.readInt32LE(32),
-              y: buf.readInt32LE(36),
-            });
-            if (!dumpedHex) {
-              dumpedHex = true;
-              logger.warn('POINTER_TOUCH_INFO bytes', {
-                hex: buf.toString('hex'),
-                length: buf.length,
-              });
-            }
+      helper.stdout.on('data', (data: string) => {
+        for (const line of data.split(/\r?\n/)) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          if (trimmed === 'READY') {
+            ready = true;
+            logger.info('touch helper ready');
           }
-          return false;
         }
-        return true;
-      } catch (err) {
-        logger.warn('InjectTouchInput threw', { err: String(err) });
-        return false;
-      }
+      });
+
+      // Failures from the PS-side InjectTouchInput call surface on
+      // stderr as "INJ_FAIL <error> flags=<f> x=<x> y=<y>". Log them
+      // throttled so a stuck drag doesn't flood the file.
+      let lastErrLog = 0;
+      helper.stderr.on('data', (data: string) => {
+        const now = Date.now();
+        if (now - lastErrLog < 1000) return;
+        lastErrLog = now;
+        for (const line of data.split(/\r?\n/)) {
+          const t = line.trim();
+          if (!t) continue;
+          if (t.startsWith('INIT_FAIL')) {
+            initFailed = true;
+            logger.warn('touch helper init failed', { line: t });
+          } else if (t.startsWith('INJ_FAIL') || t.startsWith('EX ')) {
+            logger.warn('touch helper inject error', { line: t });
+          }
+        }
+      });
+
+      helper.on('exit', (code) => {
+        logger.warn('touch helper exited', { code });
+        helper = null;
+        ready = false;
+      });
+    } catch (err) {
+      logger.warn('failed to spawn touch helper', { err: String(err) });
+      helper = null;
     }
-
-    cached = {
-      available: true,
-      tap(x, y) {
-        if (
-          !inject(
-            packTouchInfo(
-              x,
-              y,
-              POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
-            ),
-          )
-        )
-          return false;
-        return inject(packTouchInfo(x, y, POINTER_FLAG_UP));
-      },
-      pressDown(x, y) {
-        return inject(
-          packTouchInfo(
-            x,
-            y,
-            POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
-          ),
-        );
-      },
-      pressMove(x, y) {
-        return inject(
-          packTouchInfo(
-            x,
-            y,
-            POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
-          ),
-        );
-      },
-      pressUp(x, y) {
-        return inject(packTouchInfo(x, y, POINTER_FLAG_UP));
-      },
-    };
-
-    return cached;
-  } catch (err) {
-    logger.warn('touch injection failed to load — falling back to mouse', {
-      err: String(err),
-    });
-    cached = unavailable;
-    return cached;
   }
+
+  start();
+
+  function send(cmd: string): boolean {
+    if (!helper || !ready || initFailed) return false;
+    try {
+      return helper.stdin.write(cmd + '\n');
+    } catch (err) {
+      logger.warn('touch helper write failed', { err: String(err) });
+      return false;
+    }
+  }
+
+  cached = {
+    // We optimistically expose `available = true` once the process is
+    // spawned. If init fails on the PS side it'll surface on stderr
+    // and subsequent send() calls return false.
+    available: true,
+    tap(x, y) {
+      return send(`tap ${Math.round(x)} ${Math.round(y)}`);
+    },
+    pressDown(x, y) {
+      return send(`down ${Math.round(x)} ${Math.round(y)}`);
+    },
+    pressMove(x, y) {
+      return send(`move ${Math.round(x)} ${Math.round(y)}`);
+    },
+    pressUp(x, y) {
+      return send(`up ${Math.round(x)} ${Math.round(y)}`);
+    },
+  };
+
+  logger.info('touch injection backend: PowerShell helper');
+  return cached;
 }
