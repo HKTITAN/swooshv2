@@ -48,12 +48,12 @@ description: "Task list for Swoosh MVP — atomic, dependency-ordered, ralph-loo
 
 ### Electron main process skeleton
 
-- [ ] T030 Implement `apps/desktop/src/main/index.ts` — app lifecycle (single-instance lock, app.whenReady, will-quit cleanup), creates tray on launch and decides which window to open based on `tutorialSeen`
-- [ ] T031 [P] Implement `apps/desktop/src/main/logger.ts` — wraps `electron-log` with rotating file transport, exposes `logger.info/warn/error`
-- [ ] T032 [P] Implement `apps/desktop/src/main/settings/store.ts` — wraps `electron-store`, validates with Zod schema, broadcasts `settings:changed` on every write
-- [ ] T033 [P] Implement `apps/desktop/src/main/input/dispatcher.ts` — thin wrapper around nut.js exposing `moveCursor`, `click(button)`, `mouseDown`, `mouseUp`, `scroll(dx,dy)`, `keystroke(combo)`; gracefully no-ops when nut.js unavailable and emits a warning
-- [ ] T034 [P] Implement `apps/desktop/src/main/input/osHooks.ts` — subscribes to power/lock/sleep events via `electron.powerMonitor` and emits a `pauseRequested(reason)` signal
-- [ ] T035 Implement `apps/desktop/src/main/ipc.ts` — registers every channel from `shared/ipc.ts` and routes them to handler modules
+- [x] T030 Implement `apps/desktop/src/main/index.ts` — app lifecycle (single-instance lock, app.whenReady, will-quit cleanup), creates tray on launch and decides which window to open based on `tutorialSeen`
+- [x] T031 [P] Implement `apps/desktop/src/main/logger.ts` — wraps `electron-log` with rotating file transport, exposes `logger.info/warn/error`
+- [x] T032 [P] Implement `apps/desktop/src/main/settings/store.ts` — wraps `electron-store`, validates with Zod schema, broadcasts `settings:changed` on every write
+- [x] T033 [P] Implement `apps/desktop/src/main/input/dispatcher.ts` — thin wrapper around nut.js exposing `moveCursor`, `click(button)`, `mouseDown`, `mouseUp`, `scroll(dx,dy)`, `keystroke(combo)`; gracefully no-ops when nut.js unavailable and emits a warning
+- [x] T034 [P] Implement `apps/desktop/src/main/input/osHooks.ts` — subscribes to power/lock/sleep events via `electron.powerMonitor` and emits a `pauseRequested(reason)` signal
+- [x] T035 Implement `apps/desktop/src/main/ipc.ts` — registers every channel from `shared/ipc.ts` and routes them to handler modules
 
 ### Preload
 
