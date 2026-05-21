@@ -20,6 +20,26 @@ absent on the laptops most of us actually live in. Swoosh closes
 that gap with the same gestural language as Meta Quest and Vision
 Pro, on the hardware you already own.
 
+## How it works
+
+A standard webcam feeds frames to the renderer at 30–60 FPS via
+`getUserMedia`. Every frame is handed to MediaPipe's
+**HandLandmarker** (running on WASM/GPU), which returns 21 3D
+landmarks per hand with a detection score.
+
+Landmarks flow through a **1-Euro filter** to smooth jitter, then
+into a small **gesture FSM** that watches fingertip distances and
+palm motion. The FSM decides between *tracking*, *pinch*,
+*open-palm*, and *two-hand* states with hysteresis to prevent
+flicker, and emits high-level events (`pinchDown`, `click`,
+`scroll`, `swipe`).
+
+The main process translates those events into **OS input via
+nut.js** — `mouseDown`, `mouseUp`, `moveCursor`, `scroll`,
+`keystroke` — and plays a short audio cue on each pinch. The whole
+camera → cursor loop targets a **p95 latency under 100 ms** on
+reference hardware.
+
 ## Status
 
 Pre-alpha. Built spec-first using
@@ -37,6 +57,47 @@ pnpm dev
 ```
 
 For more, see [`specs/001-swoosh-mvp/quickstart.md`](./specs/001-swoosh-mvp/quickstart.md).
+
+## Supported platforms
+
+| OS      | Version           | Notes                                                 |
+| ------- | ----------------- | ----------------------------------------------------- |
+| Windows | 10 / 11 (x64)     | Tested; NSIS installer.                               |
+| macOS   | 12+ (universal)   | Requires Accessibility and Camera permission grants.  |
+| Linux   | Ubuntu 22.04+ X11 | AppImage and `.deb`. Wayland needs `uinput` access.   |
+
+## Troubleshooting
+
+**Camera permission denied.** Swoosh needs raw webcam access. On
+Windows, open *Settings → Privacy & security → Camera* and allow
+desktop apps. On macOS, *System Settings → Privacy & Security →
+Camera* and tick Swoosh; you may also need to grant **Accessibility**
+so nut.js can synthesize input. On Linux, ensure your user is in the
+`video` group.
+
+**Camera is in use by another app.** Only one process can hold the
+webcam at a time. Quit Zoom, Teams, OBS, or your browser tab and
+relaunch Swoosh. The tutorial will let you pick a different camera
+if you have more than one.
+
+**Linux Wayland: cursor doesn't move.** nut.js writes to
+`/dev/uinput`, which is root-only by default. Add a udev rule so
+your user can write to it:
+
+```bash
+echo 'KERNEL=="uinput", GROUP="input", MODE="0660"' \
+  | sudo tee /etc/udev/rules.d/99-uinput.rules
+sudo usermod -aG input "$USER"
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+Log out and back in. If Swoosh still can't move the cursor, switch
+to an X11 session — full Wayland support depends on the compositor.
+
+**macOS: clicks register but cursor never moves.** You probably
+granted Camera but not Accessibility. Open *System Settings →
+Privacy & Security → Accessibility*, click `+`, and add Swoosh.
+Restart the app.
 
 ## Principles
 

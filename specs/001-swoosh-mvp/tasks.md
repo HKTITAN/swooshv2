@@ -209,7 +209,7 @@ description: "Task list for Swoosh MVP — atomic, dependency-ordered, ralph-loo
 
 - [x] T1000 [P] CI: GitHub Actions matrix workflow `.github/workflows/build.yml` — on push to main, build + test on Windows/macOS/Ubuntu
 - [x] T1001 [P] CI: release workflow `.github/workflows/release.yml` — on tagged push, runs `pnpm package:all` and uploads artifacts to GitHub Releases
-- [ ] T1002 Documentation pass: update `README.md` with screenshots, supported OS table, install instructions, troubleshooting (Wayland uinput, macOS Accessibility), and a "How it works" section
+- [x] T1002 Documentation pass: update `README.md` with screenshots, supported OS table, install instructions, troubleshooting (Wayland uinput, macOS Accessibility), and a "How it works" section
 - [ ] T1003 [P] Edge-case coverage: implement "Lighting too low?" hint when MediaPipe score < 0.5 for 3 s
 - [ ] T1004 [P] Edge-case coverage: "Camera disconnected" handler — pause, update tray, surface toast
 - [ ] T1005 [P] Accessibility audit: keyboard nav through Settings + Tutorial, screen-reader labels on every interactive element
