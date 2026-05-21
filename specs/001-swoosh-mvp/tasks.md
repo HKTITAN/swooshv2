@@ -138,10 +138,10 @@ description: "Task list for Swoosh MVP — atomic, dependency-ordered, ralph-loo
 
 ## Phase 5 — User Story 3: Right Click (P2)
 
-- [ ] T300 [US3] Extend FSM in `packages/shared/src/gesture/fsm.ts` to detect thumb+middle pinch with the same hysteresis pattern, emitting `pinchDown/pinchUp/click { right }`
-- [ ] T301 [US3] FSM tie-breaking: when both index and middle are within pinch range, prefer the more-recently-extended finger (track per-finger extension state); add unit tests
-- [ ] T302 [US3] Add `right` button handling to `gestureRouter` in main (mirrors left mapping)
-- [ ] T303 [P] [US3] Visual hint in overlay: when ambiguous gesture detected (both finger pairs near threshold), briefly show a finger label
+- [x] T300 [US3] Extend FSM in `packages/shared/src/gesture/fsm.ts` to detect thumb+middle pinch with the same hysteresis pattern, emitting `pinchDown/pinchUp/click { right }`
+- [x] T301 [US3] FSM tie-breaking: when both index and middle are within pinch range, prefer the more-recently-extended finger (track per-finger extension state); add unit tests
+- [x] T302 [US3] Add `right` button handling to `gestureRouter` in main (mirrors left mapping)
+- [x] T303 [P] [US3] Visual hint in overlay: when ambiguous gesture detected (both finger pairs near threshold), briefly show a finger label
 
 ---
 
