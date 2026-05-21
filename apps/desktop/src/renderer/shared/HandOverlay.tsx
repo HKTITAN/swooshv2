@@ -1,23 +1,25 @@
 /**
- * HandOverlay — Canvas-backed renderer for one or two MediaPipe hands.
+ * HandOverlay — Quest / Vision Pro style outlined-hand renderer.
  *
- * Draws 21 landmarks + the bone-graph between them with the chosen
- * outline style. Mirrors the Quest / Vision Pro treatment: 2.5 px
- * pure-white stroke, joints as small filled circles, an optional
- * glow at the active pinch point.
+ * Draws each finger and the palm as a layered "tube" stroke so the
+ * shape looks like a continuous bright outline around a translucent
+ * fill, not a wireframe skeleton:
+ *
+ *   - shadow layer (thick dark stroke)   — gives the outline depth
+ *   - outline layer (thick bright stroke) — the white edge
+ *   - fill layer (thin translucent stroke + filled palm polygon)
  *
  * Styles:
- *   default       — translucent fill behind white outline + soft glow
- *   highContrast  — solid black-and-white, no glow (accessibility)
- *   minimal       — landmarks only, no bones (debug / clean look)
+ *   default       — bright white outline, translucent dark palm fill, mint pinch glow
+ *   highContrast  — solid black-on-white, no glow (accessibility)
+ *   minimal       — single-line skeleton, no fill (clean / debug look)
  *
- * Performance note: the canvas is sized once on mount and on container
- * resize; we redraw on every prop change, not on rAF. The pipeline
- * already calls us at frame cadence via the `landmarks` prop.
+ * Performance: redraws once per `landmarks` prop change, not on rAF.
+ * The pipeline calls us at frame cadence already.
  */
 
 import { useEffect, useRef } from 'react';
-import type { HandLandmarks } from '@swoosh/shared/types';
+import type { HandLandmarks, Landmark } from '@swoosh/shared/types';
 import { LANDMARK } from '@swoosh/shared/types';
 
 export type HandOverlayStyle = 'default' | 'highContrast' | 'minimal';
@@ -37,74 +39,83 @@ interface HandOverlayProps {
   className?: string;
 }
 
-// MediaPipe hand connection list — pairs of landmark indices that form
-// the skeleton's bones.
-const HAND_CONNECTIONS: Array<[number, number]> = [
-  // Thumb
-  [0, 1],
-  [1, 2],
-  [2, 3],
-  [3, 4],
-  // Index
-  [0, 5],
-  [5, 6],
-  [6, 7],
-  [7, 8],
-  // Middle
-  [5, 9],
-  [9, 10],
-  [10, 11],
-  [11, 12],
-  // Ring
-  [9, 13],
-  [13, 14],
-  [14, 15],
-  [15, 16],
-  // Pinky
-  [13, 17],
-  [17, 18],
-  [18, 19],
-  [19, 20],
-  // Palm
-  [0, 17],
+/** Finger chains — each is one continuous tube from base to tip. */
+const FINGERS: number[][] = [
+  [LANDMARK.WRIST, 1, 2, 3, LANDMARK.THUMB_TIP],
+  [LANDMARK.INDEX_MCP, 6, 7, LANDMARK.INDEX_TIP],
+  [LANDMARK.MIDDLE_MCP, 10, 11, LANDMARK.MIDDLE_TIP],
+  [LANDMARK.RING_MCP, 14, 15, LANDMARK.RING_TIP],
+  [LANDMARK.PINKY_MCP, 18, 19, LANDMARK.PINKY_TIP],
 ];
 
-interface StyleSet {
-  bone: string;
-  joint: string;
-  jointStroke?: string;
-  fillBehind: string | null;
+/** Palm polygon vertices, in order — closed loop. */
+const PALM_LOOP: number[] = [
+  LANDMARK.WRIST,
+  LANDMARK.INDEX_MCP,
+  LANDMARK.MIDDLE_MCP,
+  LANDMARK.RING_MCP,
+  LANDMARK.PINKY_MCP,
+];
+
+interface DrawTokens {
+  shadow: string;
+  outline: string;
+  inner: string;
+  palmFill: string | null;
   glow: string | null;
-  width: number;
+  shadowWidth: number;
+  outlineWidth: number;
+  innerWidth: number;
+  tipDot: number;
 }
 
-function styleFor(style: HandOverlayStyle): StyleSet {
+function tokensFor(style: HandOverlayStyle, baseSize: number): DrawTokens {
+  // baseSize is min(cssW, cssH) so strokes scale with the rendered area.
+  // For a typical 640×480 preview this gives ~14 px outline; for a
+  // fullscreen overlay it scales up to ~25 px which is the Meta Quest feel.
+  const k = baseSize / 480;
   switch (style) {
     case 'highContrast':
       return {
-        bone: '#FFFFFF',
-        joint: '#000000',
-        jointStroke: '#FFFFFF',
-        fillBehind: null,
+        shadow: 'rgba(0,0,0,0.95)',
+        outline: '#FFFFFF',
+        inner: 'rgba(0,0,0,0.85)',
+        palmFill: 'rgba(0,0,0,0.85)',
         glow: null,
-        width: 3,
+        shadowWidth: 22 * k,
+        outlineWidth: 14 * k,
+        innerWidth: 6 * k,
+        tipDot: 10 * k,
       };
     case 'minimal':
       return {
-        bone: 'rgba(255,255,255,0.0)',
-        joint: '#3FE0C5',
-        fillBehind: null,
+        shadow: 'rgba(63,224,197,0)',
+        outline: '#3FE0C5',
+        inner: 'rgba(63,224,197,0)',
+        palmFill: null,
         glow: null,
-        width: 0,
+        shadowWidth: 0,
+        outlineWidth: 3 * k,
+        innerWidth: 0,
+        tipDot: 4 * k,
       };
     case 'default':
     default:
       return {
-        bone: '#FFFFFF',
-        joint: '#FFFFFF',
-        fillBehind: 'rgba(7,10,27,0.15)',
+        // Soft drop shadow gives the outline depth without looking inked-on.
+        shadow: 'rgba(7,10,27,0.55)',
+        // Bright white outline — the Quest signature stroke.
+        outline: 'rgba(255,255,255,0.96)',
+        // Slightly translucent inner stroke to give a "tube" highlight look.
+        inner: 'rgba(255,255,255,0.30)',
+        // Dark translucent palm fill so the user's hand shows through but
+        // the outline reads cleanly against any background.
+        palmFill: 'rgba(7,10,27,0.32)',
         glow: 'rgba(63,224,197,0.55)',
-        width: 2.5,
+        shadowWidth: 20 * k,
+        outlineWidth: 13 * k,
+        innerWidth: 5 * k,
+        tipDot: 8 * k,
       };
   }
 }
@@ -114,6 +125,68 @@ function pinchDistance2D(hand: HandLandmarks): number {
   const b = hand.points[LANDMARK.INDEX_TIP];
   if (!a || !b) return Number.POSITIVE_INFINITY;
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+/**
+ * Stroke a path through a list of landmarks using a quadratic curve
+ * fit so the resulting tube reads as smooth instead of dog-legged.
+ * Falls back to straight segments when there are fewer than 3 points.
+ */
+function strokeChain(
+  ctx: CanvasRenderingContext2D,
+  pts: Landmark[],
+  width: number,
+  color: string,
+  cssW: number,
+  cssH: number,
+): void {
+  if (pts.length < 2 || width <= 0) return;
+  ctx.lineWidth = width;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = color;
+  ctx.beginPath();
+  const first = pts[0]!;
+  ctx.moveTo(first.x * cssW, first.y * cssH);
+  if (pts.length === 2) {
+    const p = pts[1]!;
+    ctx.lineTo(p.x * cssW, p.y * cssH);
+  } else {
+    // For each interior segment, place a quadratic control at the
+    // current point and end the curve at the midpoint between current
+    // and next. Final point closes with a lineTo.
+    for (let i = 1; i < pts.length - 1; i++) {
+      const p = pts[i]!;
+      const next = pts[i + 1]!;
+      const mx = ((p.x + next.x) / 2) * cssW;
+      const my = ((p.y + next.y) / 2) * cssH;
+      ctx.quadraticCurveTo(p.x * cssW, p.y * cssH, mx, my);
+    }
+    const last = pts[pts.length - 1]!;
+    ctx.lineTo(last.x * cssW, last.y * cssH);
+  }
+  ctx.stroke();
+}
+
+function drawPalmFill(
+  ctx: CanvasRenderingContext2D,
+  hand: HandLandmarks,
+  fill: string,
+  cssW: number,
+  cssH: number,
+): void {
+  ctx.beginPath();
+  for (let i = 0; i < PALM_LOOP.length; i++) {
+    const p = hand.points[PALM_LOOP[i]!];
+    if (!p) continue;
+    const x = p.x * cssW;
+    const y = p.y * cssH;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
 }
 
 export function HandOverlay({
@@ -145,81 +218,82 @@ export function HandOverlay({
 
     const cssW = w / dpr;
     const cssH = h / dpr;
-    const set = styleFor(style);
+    const tokens = tokensFor(style, Math.min(cssW, cssH));
 
     for (const hand of landmarks) {
       const pts = hand.points;
-      if (!pts || pts.length === 0) continue;
+      if (!pts || pts.length < 21) continue;
 
-      // Optional filled palm shape for the default style.
-      if (set.fillBehind) {
-        ctx.beginPath();
-        const palmIndices = [LANDMARK.WRIST, 5, 9, 13, 17];
-        for (let i = 0; i < palmIndices.length; i++) {
-          const p = pts[palmIndices[i]!];
+      // 1. Palm fill — drawn first so finger tubes overlap it cleanly.
+      if (tokens.palmFill) {
+        drawPalmFill(ctx, hand, tokens.palmFill, cssW, cssH);
+      }
+
+      // 2. Three stroke passes per finger: shadow → outline → inner.
+      for (const pass of ['shadow', 'outline', 'inner'] as const) {
+        const color =
+          pass === 'shadow'
+            ? tokens.shadow
+            : pass === 'outline'
+              ? tokens.outline
+              : tokens.inner;
+        const lineWidth =
+          pass === 'shadow'
+            ? tokens.shadowWidth
+            : pass === 'outline'
+              ? tokens.outlineWidth
+              : tokens.innerWidth;
+        if (lineWidth <= 0) continue;
+
+        // Also stroke the palm loop so the wrist edge reads continuously.
+        const palmPts = PALM_LOOP.map((i) => pts[i]).filter(
+          (p): p is Landmark => !!p,
+        );
+        if (palmPts.length >= 2) {
+          // Close the palm loop by appending the first point.
+          strokeChain(ctx, [...palmPts, palmPts[0]!], lineWidth, color, cssW, cssH);
+        }
+
+        for (const finger of FINGERS) {
+          const fingerPts = finger.map((i) => pts[i]).filter(
+            (p): p is Landmark => !!p,
+          );
+          strokeChain(ctx, fingerPts, lineWidth, color, cssW, cssH);
+        }
+      }
+
+      // 3. Fingertip caps — small filled circles at each tip for emphasis.
+      if (tokens.tipDot > 0) {
+        ctx.fillStyle = tokens.outline;
+        const tips = [
+          LANDMARK.THUMB_TIP,
+          LANDMARK.INDEX_TIP,
+          LANDMARK.MIDDLE_TIP,
+          LANDMARK.RING_TIP,
+          LANDMARK.PINKY_TIP,
+        ];
+        for (const t of tips) {
+          const p = pts[t];
           if (!p) continue;
-          const x = p.x * cssW;
-          const y = p.y * cssH;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
+          ctx.beginPath();
+          ctx.arc(p.x * cssW, p.y * cssH, tokens.tipDot / 2, 0, Math.PI * 2);
+          ctx.fill();
         }
-        ctx.closePath();
-        ctx.fillStyle = set.fillBehind;
-        ctx.fill();
       }
 
-      // Bones
-      if (set.width > 0) {
-        ctx.strokeStyle = set.bone;
-        ctx.lineWidth = set.width;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.beginPath();
-        for (const [a, b] of HAND_CONNECTIONS) {
-          const pa = pts[a];
-          const pb = pts[b];
-          if (!pa || !pb) continue;
-          ctx.moveTo(pa.x * cssW, pa.y * cssH);
-          ctx.lineTo(pb.x * cssW, pb.y * cssH);
-        }
-        ctx.stroke();
-      }
-
-      // Joints
-      ctx.fillStyle = set.joint;
-      ctx.strokeStyle = set.jointStroke ?? set.joint;
-      ctx.lineWidth = 1.5;
-      for (let i = 0; i < pts.length; i++) {
-        const p = pts[i]!;
-        ctx.beginPath();
-        // Slightly larger circle at fingertips for visual emphasis.
-        const isTip =
-          i === LANDMARK.THUMB_TIP ||
-          i === LANDMARK.INDEX_TIP ||
-          i === LANDMARK.MIDDLE_TIP ||
-          i === LANDMARK.RING_TIP ||
-          i === LANDMARK.PINKY_TIP;
-        const r = isTip ? 5 : 3;
-        ctx.arc(p.x * cssW, p.y * cssH, r, 0, Math.PI * 2);
-        ctx.fill();
-        if (set.jointStroke) ctx.stroke();
-      }
-
-      // Pinch glow
-      if (pinchGlow && set.glow) {
+      // 4. Pinch glow between thumb and index — soft radial gradient.
+      if (pinchGlow && tokens.glow) {
         const thumb = pts[LANDMARK.THUMB_TIP];
         const index = pts[LANDMARK.INDEX_TIP];
         if (thumb && index) {
           const d = pinchDistance2D(hand);
-          // Only glow when fingertips are close (heuristic — settings.threshold
-          // owns the precise pinch threshold; this is purely visual feedback).
           if (d < 0.12) {
             const cx = ((thumb.x + index.x) / 2) * cssW;
             const cy = ((thumb.y + index.y) / 2) * cssH;
             const intensity = Math.max(0, 1 - d / 0.12);
-            const r = 6 + intensity * 16;
+            const r = 10 + intensity * 28;
             const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-            grad.addColorStop(0, set.glow);
+            grad.addColorStop(0, tokens.glow);
             grad.addColorStop(1, 'rgba(63,224,197,0)');
             ctx.fillStyle = grad;
             ctx.beginPath();

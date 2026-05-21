@@ -111,9 +111,12 @@ export function CameraPreview({ settings, active, showThresholdRing }: Props) {
 
   return (
     <div className="absolute inset-0">
-      {/* The video is mirrored once via HandOverlay's `mirror` prop; we
-       * also mirror the <video> itself so the camera image and overlay
-       * match. */}
+      {/*
+       * Selfie POV: the <video> is CSS-mirrored, and HandOverlay mirrors
+       * the canvas so the outline aligns with the user's hand. The
+       * ThresholdRings overlay mirrors the same way for a consistent
+       * look across the preview.
+       */}
       <video
         ref={videoRef}
         className="absolute inset-0 h-full w-full object-cover"
@@ -125,13 +128,11 @@ export function CameraPreview({ settings, active, showThresholdRing }: Props) {
         landmarks={hands}
         style={settings.outlineStyle}
         pinchGlow
-        mirror={false}
+        mirror
         className="absolute inset-0"
       />
       {showThresholdRing ? (
-        <div className="absolute inset-0" style={{ transform: 'scaleX(-1)' }}>
-          <ThresholdRings hands={hands} radius={settings.pinchEnterThreshold} />
-        </div>
+        <ThresholdRings hands={hands} radius={settings.pinchEnterThreshold} mirror />
       ) : null}
 
       {/* FPS readout */}
@@ -180,12 +181,15 @@ function describeError(reason: string): string {
 interface ThresholdRingsProps {
   hands: HandLandmarks[];
   radius: number; // normalized 0..1
+  /** Whether the underlying video is mirrored (selfie view). */
+  mirror?: boolean;
 }
 
-function ThresholdRings({ hands, radius }: ThresholdRingsProps) {
+function ThresholdRings({ hands, radius, mirror = true }: ThresholdRingsProps) {
   // Renders a circle at index + thumb fingertips. Radius is the
   // pinch threshold expressed as a fraction of the smaller frame
-  // dimension — turn it into a ring diameter for an SVG.
+  // dimension. When the video is mirrored we mirror cx too.
+  const tx = (x: number) => (mirror ? 1 - x : x);
   return (
     <svg viewBox="0 0 1 1" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full">
       {hands.flatMap((h, hi) => {
@@ -195,7 +199,7 @@ function ThresholdRings({ hands, radius }: ThresholdRingsProps) {
         return [
           <circle
             key={`i-${hi}`}
-            cx={tipIdx.x}
+            cx={tx(tipIdx.x)}
             cy={tipIdx.y}
             r={radius / 2}
             fill="none"
@@ -205,7 +209,7 @@ function ThresholdRings({ hands, radius }: ThresholdRingsProps) {
           />,
           <circle
             key={`t-${hi}`}
-            cx={thumbIdx.x}
+            cx={tx(thumbIdx.x)}
             cy={thumbIdx.y}
             r={radius / 2}
             fill="none"

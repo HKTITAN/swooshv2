@@ -112,17 +112,20 @@ export function HandFraming({ ctx }: { ctx: TutorialContext }) {
         outline your hand once I see it.
       </p>
 
-      <div className="relative aspect-video w-full overflow-hidden rounded-card bg-ink-950">
+      <div className="relative aspect-video w-full overflow-hidden rounded-card bg-ink-950 ring-1 ring-ink-700/50 shadow-glow">
+        {/*
+         * Video is mirrored (selfie view); HandOverlay mirrors too so the
+         * outline matches the user's hand on screen. MediaPipe gives
+         * landmarks in raw camera coords; the canvas inverts x to align.
+         */}
         <video
           ref={videoRef}
           autoPlay
           muted
           playsInline
-          className="absolute inset-0 h-full w-full -scale-x-100 object-cover opacity-90"
+          className="absolute inset-0 h-full w-full -scale-x-100 object-cover"
         />
-        <div className="absolute inset-0">
-          <HandOverlay landmarks={hands} mirror={false} />
-        </div>
+        <HandOverlay landmarks={hands} mirror className="absolute inset-0" />
       </div>
 
       <div className="mt-4 flex items-center justify-between text-sm">

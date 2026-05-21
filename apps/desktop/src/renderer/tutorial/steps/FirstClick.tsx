@@ -100,17 +100,15 @@ export function FirstClick({ ctx, onSuccess }: Props) {
         thumb and index finger together.
       </p>
 
-      <div className="relative aspect-video w-full overflow-hidden rounded-card bg-ink-950">
+      <div className="relative aspect-video w-full overflow-hidden rounded-card bg-ink-950 ring-1 ring-ink-700/50 shadow-glow">
         <video
           ref={videoRef}
           autoPlay
           muted
           playsInline
-          className="absolute inset-0 h-full w-full -scale-x-100 object-cover opacity-80"
+          className="absolute inset-0 h-full w-full -scale-x-100 object-cover"
         />
-        <div className="absolute inset-0">
-          <HandOverlay landmarks={hands} mirror={false} />
-        </div>
+        <HandOverlay landmarks={hands} mirror className="absolute inset-0" />
 
         {/* Target */}
         <motion.div
