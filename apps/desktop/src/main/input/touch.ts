@@ -238,20 +238,42 @@ export function getTouchInjector(): TouchApi {
 
       // Failures from the PS-side InjectTouchInput call surface on
       // stderr as "INJ_FAIL <error> flags=<f> x=<x> y=<y>". Log them
-      // throttled so a stuck drag doesn't flood the file.
+      // throttled, and disable touch after enough consecutive failures
+      // so we don't keep spamming a non-functional kernel path.
       let lastErrLog = 0;
+      let consecutiveInjectFailures = 0;
+      const TOUCH_DISABLE_THRESHOLD = 5;
       helper.stderr.on('data', (data: string) => {
-        const now = Date.now();
-        if (now - lastErrLog < 1000) return;
-        lastErrLog = now;
         for (const line of data.split(/\r?\n/)) {
           const t = line.trim();
           if (!t) continue;
           if (t.startsWith('INIT_FAIL')) {
             initFailed = true;
             logger.warn('touch helper init failed', { line: t });
-          } else if (t.startsWith('INJ_FAIL') || t.startsWith('EX ')) {
-            logger.warn('touch helper inject error', { line: t });
+          } else if (t.startsWith('INJ_FAIL')) {
+            consecutiveInjectFailures++;
+            const now = Date.now();
+            if (now - lastErrLog >= 1000) {
+              lastErrLog = now;
+              logger.warn('touch helper inject error', {
+                line: t,
+                consecutiveFailures: consecutiveInjectFailures,
+              });
+            }
+            if (
+              consecutiveInjectFailures === TOUCH_DISABLE_THRESHOLD &&
+              !initFailed
+            ) {
+              initFailed = true; // disables subsequent send() calls
+              logger.warn(
+                'touch injection appears unsupported on this machine — disabling. ' +
+                  'Hand cursor will still track visually, but pinches will not fire OS clicks. ' +
+                  'Use scripts/test-touch-injection.ps1 to verify outside Swoosh. ' +
+                  'Your physical mouse is unaffected.',
+              );
+            }
+          } else if (t.startsWith('EX ')) {
+            logger.warn('touch helper exception', { line: t });
           }
         }
       });
