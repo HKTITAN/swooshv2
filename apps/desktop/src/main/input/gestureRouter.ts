@@ -64,14 +64,25 @@ export function createGestureRouter(input: InputDispatcher): GestureRouter {
         case 'click':
           // mouseDown+mouseUp already covers it; click is informational.
           break;
-        case 'scroll':
-          // Map normalized scroll to OS pixels. The renderer already
-          // scales by sensitivity; we just forward.
-          void input.scroll(Math.round(g.dx * 10), Math.round(g.dy * 10));
+        case 'scroll': {
+          // Map normalized scroll to OS pixels. The FSM already scales
+          // by sensitivity; we apply a per-frame magnification so a
+          // small palm movement translates to a comfortable scroll.
+          const dxPx = Math.round(g.dx * 200);
+          const dyPx = Math.round(g.dy * 200);
+          void input.scroll(dxPx, dyPx);
           break;
-        case 'swipe':
-          // Handled at T403.
+        }
+        case 'swipe': {
+          // Map directional swipes to window/tab switching keystrokes.
+          // On Win/Linux: alt+tab / alt+shift+tab cycles windows.
+          // (Browser ctrl+tab variants are handled by app-aware logic
+          // in a later task; for now we ship the universal mapping.)
+          const combo =
+            g.direction === 'right' ? 'alt+tab' : 'alt+shift+tab';
+          void input.keystroke(combo);
           break;
+        }
         case 'idle':
         case 'tracking':
         case 'twoHandResizeStart':
