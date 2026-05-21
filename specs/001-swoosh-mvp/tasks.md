@@ -62,12 +62,12 @@ description: "Task list for Swoosh MVP — atomic, dependency-ordered, ralph-loo
 
 ### Renderer foundation
 
-- [ ] T050 Create `apps/desktop/src/renderer/shared-ui/theme.css` — Baloo @font-face, CSS custom-property design tokens, base resets
-- [ ] T051 [P] Create `apps/desktop/src/renderer/shared-ui/components/Button.tsx` — pill-shaped, three variants (primary, ghost, danger), Baloo extrabold
-- [ ] T052 [P] Create `apps/desktop/src/renderer/shared-ui/components/Toggle.tsx` — accessible switch with keyboard support
-- [ ] T053 [P] Create `apps/desktop/src/renderer/shared-ui/components/Slider.tsx` — labelled range with current-value bubble
-- [ ] T054 [P] Create `apps/desktop/src/renderer/shared-ui/components/Card.tsx` — rounded panel with optional glow
-- [ ] T055 [P] Create `apps/desktop/src/renderer/shared-ui/components/AnimatedHand.tsx` — looping SVG illustration used in onboarding and empty states
+- [x] T050 Create `apps/desktop/src/renderer/shared-ui/theme.css` — Baloo @font-face, CSS custom-property design tokens, base resets
+- [x] T051 [P] Create `apps/desktop/src/renderer/shared-ui/components/Button.tsx` — pill-shaped, three variants (primary, ghost, danger), Baloo extrabold
+- [x] T052 [P] Create `apps/desktop/src/renderer/shared-ui/components/Toggle.tsx` — accessible switch with keyboard support
+- [x] T053 [P] Create `apps/desktop/src/renderer/shared-ui/components/Slider.tsx` — labelled range with current-value bubble
+- [x] T054 [P] Create `apps/desktop/src/renderer/shared-ui/components/Card.tsx` — rounded panel with optional glow
+- [x] T055 [P] Create `apps/desktop/src/renderer/shared-ui/components/AnimatedHand.tsx` — looping SVG illustration used in onboarding and empty states
 
 ### Audio engine
 
