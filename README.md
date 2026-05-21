@@ -114,8 +114,31 @@ incantation.
 ## Principles
 
 Privacy on-device. Latency-first. Cross-platform parity. Tutorial
-discoverability. Configurable everything. See
+discoverability. Configurable everything. **Hand is a separate
+input modality from the mouse.** See
 [`.specify/memory/constitution.md`](./.specify/memory/constitution.md).
+
+## Roadmap — hand-as-separate-input
+
+Today the hand pinch is dispatched as a synthesized OS mouse event.
+The router snapshots the physical mouse position, jumps the cursor
+to the hand point for the click/scroll, and snaps it back — so the
+*end state* is your mouse where you left it, but there's a visible
+flicker for the duration of the synthesized event.
+
+The Quest / Vision Pro behavior — hand input that the OS cursor
+literally never notices — requires platform-native touch / pen
+injection:
+
+- **Windows**: `InitializeTouchInjection` + `InjectSyntheticPointerInput`
+  with `PT_TOUCH` or `PT_PEN`.
+- **macOS**: `CGEventCreate` with a custom event source bound to
+  the trackpad subsystem.
+- **Linux**: `uinput` device exposing absolute touch input.
+
+These will live in `apps/desktop/src/main/input/touch/<platform>.ts`
+behind a feature flag, and gestureRouter will prefer them over the
+mouse-with-restore path when available. Tracked as a v0.2 milestone.
 
 ## License
 

@@ -12,6 +12,7 @@
  * gestures can't drive the OS yet.
  */
 
+import { screen } from 'electron';
 import { logger } from '../logger';
 
 export type MouseButton = 'left' | 'right' | 'middle';
@@ -26,6 +27,13 @@ export interface InputDispatcher {
   scroll(dx: number, dy: number): Promise<void>;
   /** Send a key combination like "alt+tab" or "control+shift+tab". */
   keystroke(combo: string): Promise<void>;
+  /**
+   * Read the current OS cursor position in logical screen pixels.
+   * Used by the gesture router to save → click → restore the
+   * physical mouse around hand-driven actions, so the user's mouse
+   * cursor isn't "stolen" by Swoosh.
+   */
+  getCursorPosition(): { x: number; y: number };
 }
 
 interface NutModule {
@@ -98,6 +106,9 @@ function noop(): InputDispatcher {
     async mouseUp() {},
     async scroll() {},
     async keystroke() {},
+    getCursorPosition() {
+      return screen.getCursorScreenPoint();
+    },
   };
 }
 
@@ -151,6 +162,12 @@ export function createInputDispatcher(): InputDispatcher {
       } catch (err) {
         logger.warn('scroll failed', { err: String(err) });
       }
+    },
+    getCursorPosition() {
+      // Use Electron's screen API rather than nut.js's mouse.getPosition
+      // so this works even when nut.js partially loads. Returns
+      // logical-pixel coordinates on the display containing the cursor.
+      return screen.getCursorScreenPoint();
     },
     async keystroke(combo) {
       // Combo format: "control+shift+tab" → resolve names to nut Key codes.
