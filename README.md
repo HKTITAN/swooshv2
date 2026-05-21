@@ -99,6 +99,18 @@ granted Camera but not Accessibility. Open *System Settings →
 Privacy & Security → Accessibility*, click `+`, and add Swoosh.
 Restart the app.
 
+**`pnpm dev` fails with "Error: Electron uninstall" on Windows.**
+pnpm's Electron postinstall step occasionally fails silently and
+leaves `node_modules/electron/dist` empty. The zip is downloaded
+fine — just not extracted. Run the helper:
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File scripts/fix-electron-install.ps1
+```
+
+or, equivalently, see the script for the manual `Expand-Archive`
+incantation.
+
 ## Principles
 
 Privacy on-device. Latency-first. Cross-platform parity. Tutorial
