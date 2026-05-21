@@ -1,37 +1,32 @@
 /**
  * Gesture router — turns FSM events from the overlay renderer into
- * concrete OS-level input.
+ * OS-level input via UI Automation (primary) and touch injection
+ * (drag fallback).
  *
- * Hard rule (from user feedback): hand input MUST NOT move the OS
- * mouse cursor under any circumstance. The hand is its own input
- * device, parallel to the mouse, exactly like Vision Pro / Quest.
- *
- * Therefore there is NO mouse fallback for hand-driven clicks. If
- * Windows touch injection succeeds, the click fires at the hand
- * point via a real touch event (mouse cursor untouched). If touch
- * injection fails or is unavailable (non-Windows, restricted env,
- * elevated target window), the gesture is simply dropped and a
- * one-time log line tells the user why. The user can still:
- *   • use their physical mouse normally — Swoosh never claims it
- *   • use the keyboard
- *   • use the hand for swipes (Alt+Tab via keystroke — no cursor)
+ * Architectural rule: hand input never moves the OS mouse cursor.
+ * The cursor is the user's mouse pointer; the hand has its own
+ * SwooshCursor that the user sees in the overlay.
  *
  * Per-gesture mapping:
  *
- *   pinchDown {left}  → touch pressDown   (or drop if touch unavail)
- *   tracking + drag   → touch pressMove   (idem)
- *   pinchUp   {left}  → touch pressUp     (idem)
- *   pinchDown {right} → drop (touch right-click via long-press is
- *                       awkward with an instant pinch; user uses
- *                       their mouse for right-click)
- *   scroll            → touch press → move → debounced release,
- *                       which the OS interprets as a pan/scroll
- *   swipe             → keystroke (Alt+Tab — global, no cursor)
- *   twoHandResize*    → main/windows/resize.ts (stub for now)
- *
- * Note: nut.js stays loaded for keystroke (swipe → Alt+Tab) and
- * resize integration. We never call moveCursor / mouseDown / mouseUp
- * from this router anymore.
+ *   pinchDown {left}  → UIA Invoke() on the element under the hand.
+ *                       Activates buttons, links, menu items,
+ *                       checkboxes, list items, combo-box toggles —
+ *                       i.e. the things you actually click. No cursor
+ *                       movement. Works on most modern apps
+ *                       (browsers, Office, Electron, .NET).
+ *   pinchDown {right} → dropped. Right-click via UIA doesn't have a
+ *                       standard pattern; user uses physical mouse.
+ *   pinchUp           → dropped. UIA Invoke is instantaneous; there's
+ *                       no "press and release" semantic in UIA.
+ *   tracking + drag   → touch.pressMove (only if touch was working).
+ *                       On hosts where touch injection is blocked,
+ *                       drag isn't possible from the hand.
+ *   scroll            → UIA ScrollPattern on the element under the
+ *                       hand. Maps palm-up → scrollUp, palm-down →
+ *                       scrollDown.
+ *   swipe             → keystroke (Alt+Tab — global, no cursor).
+ *   twoHandResize*    → main/windows/resize.ts (stub for now).
  */
 
 import type { GestureEmitPayload } from '@swoosh/shared/ipc';
@@ -43,64 +38,44 @@ import { logger } from '../logger';
 
 export interface GestureRouter {
   handle(payload: GestureEmitPayload): void;
-  /** Pause routing while tracking is suspended. */
   setEnabled(enabled: boolean): void;
 }
 
 const DRAG_MOVE_THROTTLE_MS = 1000 / 120;
-const SCROLL_IDLE_RELEASE_MS = 250;
+// Cap UIA scroll dispatch rate. UIA scrolling is discrete (one
+// SmallIncrement per call), so we don't want to fire 60 of them
+// per second on a fast palm motion — too jittery.
+const SCROLL_THROTTLE_MS = 80;
 
 export function createGestureRouter(input: InputDispatcher): GestureRouter {
   let enabled = true;
   let lastDragMoveAt = 0;
+  let lastScrollAt = 0;
   const resize = createResizeDispatcher();
-  const touch = getTouchInjector();
+  const helper = getTouchInjector();
 
-  if (touch.available) {
-    logger.info('gestureRouter: touch injection active — hand input is independent of the mouse');
+  if (helper.available) {
+    logger.info(
+      'gestureRouter: UI Automation click + scroll; touch attempted for drag. ' +
+        'OS mouse cursor remains untouched by hand input.',
+    );
   } else {
     logger.warn(
-      'gestureRouter: touch injection unavailable — hand clicks/drags will be silently dropped; user can still use mouse + keyboard',
+      'gestureRouter: input helper unavailable — hand visual only, swipe via keystroke',
     );
   }
 
+  // Drag state — only relevant when touch injection works on this host.
   let dragActive = false;
   let dragLastPt: { x: number; y: number } | null = null;
-  let scrollActive = false;
-  let scrollLastPt: { x: number; y: number } | null = null;
-  let scrollReleaseTimer: ReturnType<typeof setTimeout> | null = null;
-
-  function clearScrollTimer(): void {
-    if (scrollReleaseTimer) {
-      clearTimeout(scrollReleaseTimer);
-      scrollReleaseTimer = null;
-    }
-  }
-
-  function endScroll(): void {
-    if (!scrollActive || !scrollLastPt) {
-      scrollActive = false;
-      scrollLastPt = null;
-      return;
-    }
-    touch.pressUp(scrollLastPt.x, scrollLastPt.y);
-    scrollActive = false;
-    scrollLastPt = null;
-  }
 
   return {
     setEnabled(next) {
       enabled = next;
-      if (!enabled) {
-        // Release any in-flight touch contact so we don't leak a
-        // held button into the OS when the user pauses tracking.
-        if (dragActive && dragLastPt) {
-          touch.pressUp(dragLastPt.x, dragLastPt.y);
-          dragActive = false;
-          dragLastPt = null;
-        }
-        clearScrollTimer();
-        endScroll();
+      if (!enabled && dragActive && dragLastPt) {
+        helper.pressUp(dragLastPt.x, dragLastPt.y);
+        dragActive = false;
+        dragLastPt = null;
       }
     },
     handle(payload) {
@@ -109,13 +84,15 @@ export function createGestureRouter(input: InputDispatcher): GestureRouter {
 
       switch (g.kind) {
         case 'pinchDown': {
-          if (g.button !== 'left' || !touch.available) {
-            // Right-click and touch-unavailable left-click both drop.
-            // The mouse cursor must stay where the user left it.
-            break;
-          }
+          if (g.button !== 'left') break; // right-click dropped
           const pt = mapToScreen(payload.cursor);
-          if (touch.pressDown(pt.x, pt.y)) {
+          // UIA click is the primary path — fires immediately.
+          helper.click(pt.x, pt.y);
+          // ALSO start a touch contact for potential drag. If touch
+          // injection works on this host, subsequent tracking events
+          // will continue the contact; if not, the touch attempt fails
+          // silently. Either way the UIA click already happened.
+          if (helper.pressDown(pt.x, pt.y)) {
             dragActive = true;
             dragLastPt = pt;
           }
@@ -124,44 +101,31 @@ export function createGestureRouter(input: InputDispatcher): GestureRouter {
 
         case 'pinchUp': {
           if (!dragActive || !dragLastPt) break;
-          touch.pressUp(dragLastPt.x, dragLastPt.y);
+          helper.pressUp(dragLastPt.x, dragLastPt.y);
           dragActive = false;
           dragLastPt = null;
           break;
         }
 
         case 'click':
-          // Down/up pair already handles it; click is informational.
+          // Down/up pair already covers it.
           break;
 
         case 'scroll': {
-          if (!touch.available) break; // user can scroll with mouse wheel
+          const now = Date.now();
+          if (now - lastScrollAt < SCROLL_THROTTLE_MS) break;
+          lastScrollAt = now;
           const pt = mapToScreen(payload.cursor);
-          if (!scrollActive) {
-            if (touch.pressDown(pt.x, pt.y)) {
-              scrollActive = true;
-              scrollLastPt = pt;
-            }
-          } else {
-            // Update the contact position to wherever the hand is now.
-            // The OS interprets the continued contact movement as a
-            // pan/scroll gesture on the element under the touch point.
-            if (touch.pressMove(pt.x, pt.y)) {
-              scrollLastPt = pt;
-            }
+          if (g.dy > 0) {
+            // Palm moved DOWN in selfie view → scroll content down.
+            helper.scrollDown(pt.x, pt.y);
+          } else if (g.dy < 0) {
+            helper.scrollUp(pt.x, pt.y);
           }
-          // Reset the idle-release timer — as long as scroll events
-          // keep coming we keep the contact alive.
-          clearScrollTimer();
-          scrollReleaseTimer = setTimeout(() => {
-            scrollReleaseTimer = null;
-            endScroll();
-          }, SCROLL_IDLE_RELEASE_MS);
           break;
         }
 
         case 'swipe': {
-          // Alt+Tab is global — no cursor or touch involvement at all.
           const combo = g.direction === 'right' ? 'alt+tab' : 'alt+shift+tab';
           void input.keystroke(combo);
           break;
@@ -178,28 +142,26 @@ export function createGestureRouter(input: InputDispatcher): GestureRouter {
           break;
 
         case 'tracking': {
-          // Drag mode: while a pinch is held, continue the touch
-          // contact at the hand's new position so drag tracks the hand.
+          // Drag mode: continue the touch contact at the hand's new
+          // position (no-op if touch injection isn't supported on
+          // this host).
           if (!dragActive || !dragLastPt) break;
           const now = Date.now();
           if (now - lastDragMoveAt < DRAG_MOVE_THROTTLE_MS) break;
           lastDragMoveAt = now;
           const pt = mapToScreen(payload.cursor);
-          if (touch.pressMove(pt.x, pt.y)) {
+          if (helper.pressMove(pt.x, pt.y)) {
             dragLastPt = pt;
           }
           break;
         }
 
         case 'idle':
-          // Defensive cleanup.
           if (dragActive && dragLastPt) {
-            touch.pressUp(dragLastPt.x, dragLastPt.y);
+            helper.pressUp(dragLastPt.x, dragLastPt.y);
             dragActive = false;
             dragLastPt = null;
           }
-          clearScrollTimer();
-          endScroll();
           break;
       }
     },

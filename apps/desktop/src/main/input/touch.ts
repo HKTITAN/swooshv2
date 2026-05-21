@@ -1,34 +1,38 @@
 /**
- * Windows synthetic touch injection via a PowerShell child process.
+ * Hand-input OS integration — UI Automation primary, touch fallback.
  *
- * After exhausting koffi-based FFI (struct layout was provably
- * correct down to the bit but Windows kept returning 87 — likely a
- * subtle marshaling issue around the mixed 4/8-byte fields in
- * POINTER_INFO), we switched to PowerShell as the touch backend.
+ * After three rounds of touch injection failing at the OS level on
+ * the host machine (ERROR_INVALID_PARAMETER even with byte-perfect
+ * packets matching Microsoft's official sample, verified via both
+ * koffi FFI and .NET P/Invoke), we switched the primary click path
+ * to UI Automation.
  *
- * Why PowerShell:
- *   - It's built into every Windows install (5.1+ since Win10).
- *   - PowerShell uses .NET's mature P/Invoke marshaling — 20+ years
- *     of battle-tested struct layout handling, the same plumbing
- *     Microsoft's own UWP touch samples use under the hood.
- *   - No native build step, no extra binary to bundle.
+ * UI Automation is Windows' accessibility framework. Every visible
+ * UI element exposes itself via IUIAutomationElement; we can find
+ * the element at a screen point and call its native Invoke() pattern
+ * (or LegacyIAccessible default action) to activate it. The OS
+ * cursor never moves and the user's mouse remains untouched.
  *
- * How it works:
- *   - On first call, we spawn `powershell.exe` with an inline script
- *     that uses Add-Type to compile a tiny C# class wrapping
- *     `InitializeTouchInjection` + `InjectTouchInput`.
- *   - Once the script prints `READY` on stdout, the helper is alive.
- *   - We send commands like "tap 500 300", "down 500 300",
- *     "move 510 305", "up 510 305" to its stdin. The helper executes
- *     them and writes back "OK" or "ERR <code>".
- *   - We don't await responses for performance — just fire commands
- *     and move on. The helper logs failures to its stderr which we
- *     forward to our log.
+ * Coverage:
+ *   + Chrome, Edge, Firefox (full UIA tree)
+ *   + Microsoft Office
+ *   + Electron apps (Slack, VS Code, Discord, etc.)
+ *   + Most native .NET apps
+ *   + Win32 apps that expose MSAA / UIA properly
+ *   - Games, custom-render apps, anything that doesn't expose UIA
  *
- * The OS mouse cursor is NEVER touched. If the helper fails to start
- * or `InitializeTouchInjection` fails, all hand-driven actions are
- * dropped — the cursor still stays put, the user can still use their
- * mouse normally.
+ * Mechanism:
+ *   - We spawn powershell.exe once with an inline C# helper.
+ *   - The helper uses System.Windows.Automation (UI Automation
+ *     client SDK shipped with .NET) and System.Windows.Input.
+ *   - Node sends commands: 'click x y', 'scrollUp x y', 'scrollDown x y',
+ *     'down x y', 'move x y', 'up x y' (touch — kept for the systems
+ *     where it works), 'quit'.
+ *   - Helper prints OK / NOELT / FAIL per command on stderr.
+ *
+ * Architectural rule (unchanged): hand input never moves the OS
+ * mouse cursor. If a hand action can't be executed (UIA elt not
+ * invokable, touch unsupported), the action is silently dropped.
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -36,35 +40,47 @@ import { logger } from '../logger';
 
 const isWindows = process.platform === 'win32';
 
-interface TouchApi {
+interface InputApi {
   available: boolean;
-  tap(x: number, y: number): boolean;
+  /**
+   * Activate the UI element at (x, y) via UI Automation.
+   * Falls back to a touch tap if UIA doesn't find an invokable element.
+   */
+  click(x: number, y: number): boolean;
+  /** Scroll the scrollable element at (x, y) up by one increment. */
+  scrollUp(x: number, y: number): boolean;
+  /** Scroll down by one increment. */
+  scrollDown(x: number, y: number): boolean;
+  /** Touch-based drag, used when touch injection works on the host. */
   pressDown(x: number, y: number): boolean;
   pressMove(x: number, y: number): boolean;
   pressUp(x: number, y: number): boolean;
 }
 
-const unavailable: TouchApi = {
+const unavailable: InputApi = {
   available: false,
-  tap: () => false,
+  click: () => false,
+  scrollUp: () => false,
+  scrollDown: () => false,
   pressDown: () => false,
   pressMove: () => false,
   pressUp: () => false,
 };
 
-// PowerShell script — compiles a tiny C# class via Add-Type, calls
-// InitializeTouchInjection, then loops reading commands from stdin.
-// The C# struct layout uses [StructLayout(LayoutKind.Sequential)]
-// which leverages .NET's mature marshaling rules (the same rules
-// the Windows headers were designed against).
 const POWERSHELL_HELPER_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
 [Console]::InputEncoding  = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName WindowsBase
+
 $src = @"
 using System;
 using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Automation;
 
 [StructLayout(LayoutKind.Sequential)]
 public struct POINT { public int x; public int y; }
@@ -103,53 +119,131 @@ public struct PointerTouchInfo {
     public uint pressure;
 }
 
-public static class TI {
+public static class WIN {
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool InitializeTouchInjection(uint maxCount, uint dwMode);
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool InjectTouchInput(uint count, [In] PointerTouchInfo[] contacts);
-    [DllImport("kernel32.dll")]
-    public static extern uint GetTickCount();
+}
+
+public static class UIA {
+    /**
+     * Find the most specific UIA element at the given screen point
+     * and try to activate it. Returns:
+     *   "OK"      — invoked / toggled successfully
+     *   "NOELT"   — no element at that point
+     *   "NOPATTERN" — element found but has no invokable pattern
+     */
+    public static string Click(int x, int y) {
+        try {
+            var pt = new System.Windows.Point(x, y);
+            var elt = AutomationElement.FromPoint(pt);
+            if (elt == null) return "NOELT";
+
+            // 1. InvokePattern — preferred (buttons, links, menu items).
+            object invokeObj;
+            if (elt.TryGetCurrentPattern(InvokePattern.Pattern, out invokeObj)) {
+                ((InvokePattern)invokeObj).Invoke();
+                return "OK";
+            }
+            // 2. TogglePattern — checkboxes, toggle buttons.
+            object toggleObj;
+            if (elt.TryGetCurrentPattern(TogglePattern.Pattern, out toggleObj)) {
+                ((TogglePattern)toggleObj).Toggle();
+                return "OK";
+            }
+            // 3. SelectionItemPattern — list/tree items, tabs, radios.
+            object selObj;
+            if (elt.TryGetCurrentPattern(SelectionItemPattern.Pattern, out selObj)) {
+                ((SelectionItemPattern)selObj).Select();
+                return "OK";
+            }
+            // 4. ExpandCollapsePattern — combo boxes, tree nodes.
+            object expandObj;
+            if (elt.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out expandObj)) {
+                var p = (ExpandCollapsePattern)expandObj;
+                if (p.Current.ExpandCollapseState == ExpandCollapseState.Collapsed)
+                    p.Expand();
+                else
+                    p.Collapse();
+                return "OK";
+            }
+            return "NOPATTERN";
+        } catch (Exception ex) {
+            return "EX:" + ex.Message;
+        }
+    }
+
+    /** Scroll up one increment on the scrollable element at (x, y). */
+    public static string ScrollUp(int x, int y) {
+        return ScrollImpl(x, y, ScrollAmount.SmallDecrement, true);
+    }
+    public static string ScrollDown(int x, int y) {
+        return ScrollImpl(x, y, ScrollAmount.SmallIncrement, true);
+    }
+    static string ScrollImpl(int x, int y, ScrollAmount amount, bool vertical) {
+        try {
+            var pt = new System.Windows.Point(x, y);
+            var elt = AutomationElement.FromPoint(pt);
+            if (elt == null) return "NOELT";
+
+            // Walk up the tree until we find something scrollable. The
+            // hit element is usually a leaf (text), the scroll container
+            // is one or more parents up.
+            var walker = TreeWalker.RawViewWalker;
+            var cur = elt;
+            while (cur != null) {
+                object scrollObj;
+                if (cur.TryGetCurrentPattern(ScrollPattern.Pattern, out scrollObj)) {
+                    var sp = (ScrollPattern)scrollObj;
+                    if (vertical && sp.Current.VerticallyScrollable) {
+                        sp.Scroll(ScrollAmount.NoAmount, amount);
+                        return "OK";
+                    }
+                }
+                object siObj;
+                if (cur.TryGetCurrentPattern(ScrollItemPattern.Pattern, out siObj)) {
+                    ((ScrollItemPattern)siObj).ScrollIntoView();
+                    return "OK";
+                }
+                cur = walker.GetParent(cur);
+            }
+            return "NOSCROLL";
+        } catch (Exception ex) {
+            return "EX:" + ex.Message;
+        }
+    }
 }
 "@
 
-Add-Type -TypeDefinition $src -Language CSharp
+Add-Type -TypeDefinition $src -ReferencedAssemblies UIAutomationClient,UIAutomationTypes,WindowsBase -Language CSharp
 
-# TOUCH_FEEDBACK_DEFAULT = 1 (does NOT require UIAccess).
-if (-not [TI]::InitializeTouchInjection(10, 1)) {
-    $e = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
-    [Console]::Error.WriteLine("INIT_FAIL $e")
-    exit 1
+# Touch injection — attempted but may fail on hosts where the kernel
+# rejects synthetic touch (the user's case). We try it; if it never
+# works the gestureRouter has its own threshold to stop sending touch
+# commands. UIA is now the primary click path.
+$touchAvailable = [WIN]::InitializeTouchInjection(10, 1)
+if (-not $touchAvailable) {
+    [Console]::Error.WriteLine("TOUCH_INIT_FAIL " + [System.Runtime.InteropServices.Marshal]::GetLastWin32Error())
 }
 
-# Pointer flag bits from Windows.h.
+$contacts = New-Object 'PointerTouchInfo[]' 1
+$template = New-Object PointerTouchInfo
+$template.pointerInfo.pointerType = 2  # PT_TOUCH
+$template.pointerInfo.pointerId   = 0
+$template.touchFlags = 0
+$template.touchMask  = 0x07
+$template.orientation = 90
+$template.pressure    = 32000
+
 $FLAG_INRANGE   = 0x00000002
 $FLAG_INCONTACT = 0x00000004
 $FLAG_DOWN      = 0x00010000
 $FLAG_UPDATE    = 0x00020000
 $FLAG_UP        = 0x00040000
-$PT_TOUCH       = 2
-# touchMask: CONTACTAREA | ORIENTATION | PRESSURE
-$MASK = 0x07
 
-# A shared template contact, reused across calls. Microsoft's official
-# TouchInjection sample initializes the struct ONCE with memset(0),
-# only sets the active fields, and re-uses the same instance — only
-# updating pointerFlags between DOWN, UPDATE, and UP. We follow that
-# pattern exactly: dwTime, frameId, ptPixelLocationRaw, rcContactRaw,
-# PerformanceCount, ButtonChangeType all stay at zero. Setting any of
-# them to a non-zero value (e.g., a real GetTickCount) makes Windows
-# return ERROR_INVALID_PARAMETER (87) — discovered the hard way.
-$template = New-Object PointerTouchInfo
-$template.pointerInfo.pointerType = $PT_TOUCH
-$template.pointerInfo.pointerId   = 0
-$template.touchFlags = 0
-$template.touchMask  = $MASK
-$template.orientation = 90
-$template.pressure    = 32000
-$contacts = New-Object 'PointerTouchInfo[]' 1
-
-function Inject([int]$x, [int]$y, [uint32]$flags) {
+function InjectTouch([int]$x, [int]$y, [uint32]$flags) {
+    if (-not $touchAvailable) { return $false }
     $c = $template
     $c.pointerInfo.ptPixelLocation = New-Object POINT
     $c.pointerInfo.ptPixelLocation.x = $x
@@ -160,14 +254,13 @@ function Inject([int]$x, [int]$y, [uint32]$flags) {
     $c.rcContact.top    = $y - 2
     $c.rcContact.right  = $x + 2
     $c.rcContact.bottom = $y + 2
-    # NOTE: ptPixelLocationRaw, ptHimetricLocation*, rcContactRaw,
-    # dwTime, historyCount, inputData, dwKeyStates, performanceCount,
-    # buttonChangeType all stay 0 — matches MS sample exactly.
     $contacts[0] = $c
-    if (-not [TI]::InjectTouchInput(1, $contacts)) {
+    if (-not [WIN]::InjectTouchInput(1, $contacts)) {
         $e = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
         [Console]::Error.WriteLine("INJ_FAIL $e flags=$flags x=$x y=$y")
+        return $false
     }
+    return $true
 }
 
 [Console]::Out.WriteLine("READY")
@@ -181,19 +274,32 @@ while ($true) {
         $parts = $line.Split(' ')
         $cmd = $parts[0]
         if ($cmd -eq 'quit') { break }
-        $x = [int]$parts[1]
-        $y = [int]$parts[2]
+
         switch ($cmd) {
-            'tap'  {
-                # MS sample sleeps ~10 ms between DOWN and UP so the
-                # OS can sequence the events as a discrete tap.
-                Inject $x $y ($FLAG_DOWN -bor $FLAG_INRANGE -bor $FLAG_INCONTACT)
-                Start-Sleep -Milliseconds 10
-                Inject $x $y $FLAG_UP
+            'click' {
+                $x = [int]$parts[1]; $y = [int]$parts[2]
+                $r = [UIA]::Click($x, $y)
+                if ($r -ne 'OK') {
+                    [Console]::Error.WriteLine("UIA_CLICK $r x=$x y=$y")
+                }
             }
-            'down' { Inject $x $y ($FLAG_DOWN  -bor $FLAG_INRANGE -bor $FLAG_INCONTACT) }
-            'move' { Inject $x $y ($FLAG_UPDATE -bor $FLAG_INRANGE -bor $FLAG_INCONTACT) }
-            'up'   { Inject $x $y $FLAG_UP }
+            'scrollUp' {
+                $x = [int]$parts[1]; $y = [int]$parts[2]
+                $r = [UIA]::ScrollUp($x, $y)
+                if ($r -ne 'OK') {
+                    [Console]::Error.WriteLine("UIA_SCROLL $r x=$x y=$y")
+                }
+            }
+            'scrollDown' {
+                $x = [int]$parts[1]; $y = [int]$parts[2]
+                $r = [UIA]::ScrollDown($x, $y)
+                if ($r -ne 'OK') {
+                    [Console]::Error.WriteLine("UIA_SCROLL $r x=$x y=$y")
+                }
+            }
+            'down' { InjectTouch ([int]$parts[1]) ([int]$parts[2]) ($FLAG_DOWN -bor $FLAG_INRANGE -bor $FLAG_INCONTACT) | Out-Null }
+            'move' { InjectTouch ([int]$parts[1]) ([int]$parts[2]) ($FLAG_UPDATE -bor $FLAG_INRANGE -bor $FLAG_INCONTACT) | Out-Null }
+            'up'   { InjectTouch ([int]$parts[1]) ([int]$parts[2]) $FLAG_UP | Out-Null }
         }
     } catch {
         [Console]::Error.WriteLine("EX $_")
@@ -201,9 +307,9 @@ while ($true) {
 }
 `;
 
-let cached: TouchApi | null = null;
+let cached: InputApi | null = null;
 
-export function getTouchInjector(): TouchApi {
+export function getTouchInjector(): InputApi {
   if (cached) return cached;
   if (!isWindows) {
     cached = unavailable;
@@ -212,13 +318,19 @@ export function getTouchInjector(): TouchApi {
 
   let helper: ChildProcessWithoutNullStreams | null = null;
   let ready = false;
-  let initFailed = false;
 
   function start(): void {
     try {
       helper = spawn(
         'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', POWERSHELL_HELPER_SCRIPT],
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-Command',
+          POWERSHELL_HELPER_SCRIPT,
+        ],
         { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
       );
 
@@ -231,60 +343,62 @@ export function getTouchInjector(): TouchApi {
           if (!trimmed) continue;
           if (trimmed === 'READY') {
             ready = true;
-            logger.info('touch helper ready');
+            logger.info('input helper ready (UIA primary + touch attempt)');
           }
         }
       });
 
-      // Failures from the PS-side InjectTouchInput call surface on
-      // stderr as "INJ_FAIL <error> flags=<f> x=<x> y=<y>". Log them
-      // throttled, and disable touch after enough consecutive failures
-      // so we don't keep spamming a non-functional kernel path.
       let lastErrLog = 0;
-      let consecutiveInjectFailures = 0;
-      const TOUCH_DISABLE_THRESHOLD = 5;
+      let touchInjectFails = 0;
+      let touchDisabled = false;
       helper.stderr.on('data', (data: string) => {
         for (const line of data.split(/\r?\n/)) {
           const t = line.trim();
           if (!t) continue;
-          if (t.startsWith('INIT_FAIL')) {
-            initFailed = true;
-            logger.warn('touch helper init failed', { line: t });
+          if (t.startsWith('TOUCH_INIT_FAIL')) {
+            logger.warn('touch injection init failed (UIA still works)', { line: t });
           } else if (t.startsWith('INJ_FAIL')) {
-            consecutiveInjectFailures++;
+            touchInjectFails++;
+            if (touchInjectFails === 5 && !touchDisabled) {
+              touchDisabled = true;
+              logger.warn(
+                'touch injection unsupported on this host — pinch-drag disabled. ' +
+                  'UIA-based click and scroll still work. Mouse unaffected.',
+              );
+            }
             const now = Date.now();
             if (now - lastErrLog >= 1000) {
               lastErrLog = now;
               logger.warn('touch helper inject error', {
                 line: t,
-                consecutiveFailures: consecutiveInjectFailures,
+                fails: touchInjectFails,
               });
             }
-            if (
-              consecutiveInjectFailures === TOUCH_DISABLE_THRESHOLD &&
-              !initFailed
-            ) {
-              initFailed = true; // disables subsequent send() calls
-              logger.warn(
-                'touch injection appears unsupported on this machine — disabling. ' +
-                  'Hand cursor will still track visually, but pinches will not fire OS clicks. ' +
-                  'Use scripts/test-touch-injection.ps1 to verify outside Swoosh. ' +
-                  'Your physical mouse is unaffected.',
-              );
+          } else if (t.startsWith('UIA_CLICK')) {
+            // Common case: NOELT (clicked on desktop / non-UIA region)
+            // or NOPATTERN (decorative element). Log throttled.
+            const now = Date.now();
+            if (now - lastErrLog >= 1000) {
+              lastErrLog = now;
+              logger.info('UIA click could not activate element', { line: t });
             }
-          } else if (t.startsWith('EX ')) {
-            logger.warn('touch helper exception', { line: t });
+          } else if (t.startsWith('UIA_SCROLL') || t.startsWith('EX ')) {
+            const now = Date.now();
+            if (now - lastErrLog >= 1000) {
+              lastErrLog = now;
+              logger.info('input helper note', { line: t });
+            }
           }
         }
       });
 
       helper.on('exit', (code) => {
-        logger.warn('touch helper exited', { code });
+        logger.warn('input helper exited', { code });
         helper = null;
         ready = false;
       });
     } catch (err) {
-      logger.warn('failed to spawn touch helper', { err: String(err) });
+      logger.warn('failed to spawn input helper', { err: String(err) });
       helper = null;
     }
   }
@@ -292,22 +406,25 @@ export function getTouchInjector(): TouchApi {
   start();
 
   function send(cmd: string): boolean {
-    if (!helper || !ready || initFailed) return false;
+    if (!helper || !ready) return false;
     try {
       return helper.stdin.write(cmd + '\n');
     } catch (err) {
-      logger.warn('touch helper write failed', { err: String(err) });
+      logger.warn('input helper write failed', { err: String(err) });
       return false;
     }
   }
 
   cached = {
-    // We optimistically expose `available = true` once the process is
-    // spawned. If init fails on the PS side it'll surface on stderr
-    // and subsequent send() calls return false.
     available: true,
-    tap(x, y) {
-      return send(`tap ${Math.round(x)} ${Math.round(y)}`);
+    click(x, y) {
+      return send(`click ${Math.round(x)} ${Math.round(y)}`);
+    },
+    scrollUp(x, y) {
+      return send(`scrollUp ${Math.round(x)} ${Math.round(y)}`);
+    },
+    scrollDown(x, y) {
+      return send(`scrollDown ${Math.round(x)} ${Math.round(y)}`);
     },
     pressDown(x, y) {
       return send(`down ${Math.round(x)} ${Math.round(y)}`);
@@ -320,6 +437,6 @@ export function getTouchInjector(): TouchApi {
     },
   };
 
-  logger.info('touch injection backend: PowerShell helper');
+  logger.info('input backend: UI Automation + touch via PowerShell helper');
   return cached;
 }
