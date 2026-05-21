@@ -63,7 +63,13 @@ export interface FsmThresholds {
   smoothing: { minCutoff: number; beta: number };
 }
 
-export type FsmKind = 'IDLE' | 'TRACKING' | 'PINCH_LEFT' | 'PINCH_RIGHT' | 'OPEN_PALM';
+export type FsmKind =
+  | 'IDLE'
+  | 'TRACKING'
+  | 'PINCH_LEFT'
+  | 'PINCH_RIGHT'
+  | 'OPEN_PALM'
+  | 'TWO_HAND_RESIZE';
 
 interface PinchSubstate {
   button: PinchButton;
@@ -95,6 +101,12 @@ export interface FsmState {
   lastPalm: { x: number; y: number; ts: number } | null;
   /** Consecutive frames where horizontal palm velocity exceeded the swipe threshold. */
   swipeStreak: { direction: 'left' | 'right'; frames: number; lastVel: number } | null;
+  /**
+   * Two-hand resize bookkeeping: the inter-hand pinch-anchor distance at
+   * the moment both hands started pinching. Each subsequent frame
+   * computes `scale = currentDistance / initialDistance`.
+   */
+  resize: { initialDistance: number } | null;
 }
 
 export function createFsmState(thresholds: FsmThresholds): FsmState {
@@ -109,6 +121,7 @@ export function createFsmState(thresholds: FsmThresholds): FsmState {
     lastMiddleOpenTs: 0,
     lastPalm: null,
     swipeStreak: null,
+    resize: null,
   };
 }
 
@@ -139,7 +152,7 @@ export function step(
   hands: HandLandmarks[],
   thr: FsmThresholds,
 ): { state: FsmState; events: Gesture[]; pointer: { x: number; y: number } } {
-  // No hands: go idle (release any active pinch).
+  // No hands: go idle (release any active pinch or resize).
   if (hands.length === 0) {
     const events: Gesture[] = [];
     if (prev.kind === 'PINCH_LEFT' || prev.kind === 'PINCH_RIGHT') {
@@ -147,14 +160,25 @@ export function step(
       events.push({ kind: 'pinchUp', button });
       // No click synthesized — losing the hand is not a click.
     }
+    if (prev.kind === 'TWO_HAND_RESIZE') {
+      events.push({ kind: 'twoHandResizeEnd' });
+    }
     events.push({ kind: 'idle' });
     prev.kind = 'IDLE';
     prev.pinch = undefined;
+    prev.resize = null;
     prev.pointerFilter.reset();
     prev.lastPalm = null;
     prev.swipeStreak = null;
     return { state: prev, events, pointer: prev.lastPointer };
   }
+
+  // Two-hand resize (US6) — checked BEFORE single-hand logic so that
+  // when both hands pinch, the user enters resize mode instead of
+  // double-firing pinchDown events. Falls through to single-hand
+  // handling when the two-hand criteria aren't met.
+  const twoHandResult = stepTwoHand(prev, hands, thr);
+  if (twoHandResult) return twoHandResult;
 
   // Pick the most-confident hand for single-hand gestures.
   const hand = hands.reduce((best, h) => (h.score > best.score ? h : best), hands[0]!);
@@ -390,6 +414,102 @@ function handleOpenPalm(
   }
 
   state.lastPalm = { ...palm, ts: hand.ts };
+}
+
+/**
+ * Two-hand resize transition (T600/T601).
+ *
+ * Returns null when the two-hand criteria aren't met — the caller should
+ * fall through to single-hand handling. Returns a result when the FSM
+ * is entering, holding, or just exited TWO_HAND_RESIZE.
+ *
+ * Eligibility: ≥ 2 hands detected AND both pinch their index+thumb.
+ * Hysteresis: once in TWO_HAND_RESIZE, both fingertips can drift out
+ * to `pinchExitThreshold` before the state releases — prevents flicker
+ * mid-resize.
+ *
+ * Pointer in this state is left at its last single-hand value; the
+ * resize gesture conveys all the relevant info via the `scale` delta.
+ */
+function stepTwoHand(
+  prev: FsmState,
+  hands: HandLandmarks[],
+  thr: FsmThresholds,
+): { state: FsmState; events: Gesture[]; pointer: { x: number; y: number } } | null {
+  if (hands.length < 2) {
+    if (prev.kind === 'TWO_HAND_RESIZE') {
+      // Lost one hand mid-resize — release.
+      const events: Gesture[] = [
+        { kind: 'twoHandResizeEnd' },
+        { kind: 'tracking' },
+      ];
+      prev.kind = 'TRACKING';
+      prev.resize = null;
+      return { state: prev, events, pointer: prev.lastPointer };
+    }
+    return null;
+  }
+
+  // Pick the two most-confident hands. (We don't care about handedness
+  // here — pinch + pinch is the trigger regardless of which hand is which.)
+  const sorted = [...hands].sort((a, b) => b.score - a.score);
+  const h1 = sorted[0]!;
+  const h2 = sorted[1]!;
+
+  const d1 = pinchDistance(h1, LANDMARK.THUMB_TIP, LANDMARK.INDEX_TIP);
+  const d2 = pinchDistance(h2, LANDMARK.THUMB_TIP, LANDMARK.INDEX_TIP);
+
+  const wasResizing = prev.kind === 'TWO_HAND_RESIZE';
+  const h1Closed = isClosed(
+    d1,
+    wasResizing,
+    thr.pinchEnterThreshold,
+    thr.pinchExitThreshold,
+  );
+  const h2Closed = isClosed(
+    d2,
+    wasResizing,
+    thr.pinchEnterThreshold,
+    thr.pinchExitThreshold,
+  );
+
+  if (h1Closed && h2Closed) {
+    const p1 = pinchAnchor(h1);
+    const p2 = pinchAnchor(h2);
+    const interDist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+    const events: Gesture[] = [];
+
+    if (!wasResizing) {
+      // Entering. Don't fire deltas on the entry frame — we have no
+      // baseline yet. The next frame will emit the first delta.
+      events.push({ kind: 'twoHandResizeStart' });
+      prev.kind = 'TWO_HAND_RESIZE';
+      prev.resize = { initialDistance: Math.max(1e-6, interDist) };
+      // Clear single-hand bookkeeping that no longer applies.
+      prev.pinch = undefined;
+      prev.lastPalm = null;
+      prev.swipeStreak = null;
+    } else if (prev.resize) {
+      const scale = interDist / prev.resize.initialDistance;
+      events.push({ kind: 'twoHandResizeDelta', scale });
+    }
+
+    return { state: prev, events, pointer: prev.lastPointer };
+  }
+
+  // Two hands present but no longer both pinching: if we were in
+  // TWO_HAND_RESIZE, exit. Otherwise let single-hand logic handle this
+  // frame normally.
+  if (wasResizing) {
+    const events: Gesture[] = [
+      { kind: 'twoHandResizeEnd' },
+      { kind: 'tracking' },
+    ];
+    prev.kind = 'TRACKING';
+    prev.resize = null;
+    return { state: prev, events, pointer: prev.lastPointer };
+  }
+  return null;
 }
 
 /** Build a FsmStepResult from the reducer output (used by callers). */

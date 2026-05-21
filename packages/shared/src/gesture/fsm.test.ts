@@ -320,3 +320,118 @@ describe('FSM — losing the hand', () => {
     expect(s.kind).toBe('IDLE');
   });
 });
+
+/**
+ * Build a pair of hands, each pinching its index+thumb, anchored at
+ * separate pointer positions. Distance between pinch points equals
+ * |a.x - b.x|. Use this to drive two-hand resize tests.
+ */
+function twoPinchingHands(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  opts: { ts?: number; pinchDist?: number } = {},
+): [HandLandmarks, HandLandmarks] {
+  const pinchDist = opts.pinchDist ?? 0.03;
+  return [
+    handWithPinchDistance(pinchDist, { ts: opts.ts, pointer: a }),
+    handWithPinchDistance(pinchDist, { ts: opts.ts, pointer: b }),
+  ];
+}
+
+describe('FSM — two-hand resize (US6)', () => {
+  it('enters TWO_HAND_RESIZE and emits twoHandResizeStart when both hands pinch', () => {
+    const s = createFsmState(DEFAULT_THR);
+    const hands = twoPinchingHands({ x: 0.3, y: 0.5 }, { x: 0.7, y: 0.5 }, { ts: 16 });
+    const out = step(s, hands, DEFAULT_THR);
+    expect(kinds(out.events)).toContain('twoHandResizeStart');
+    expect(out.state.kind).toBe('TWO_HAND_RESIZE');
+    expect(out.state.resize?.initialDistance).toBeCloseTo(0.4, 5);
+  });
+
+  it('emits scale > 1 when hands spread apart, < 1 when they close', () => {
+    const s = createFsmState(DEFAULT_THR);
+    // Entry frame at distance 0.4
+    step(s, twoPinchingHands({ x: 0.3, y: 0.5 }, { x: 0.7, y: 0.5 }, { ts: 0 }), DEFAULT_THR);
+    // Spread to 0.6 → scale 1.5
+    const spread = step(
+      s,
+      twoPinchingHands({ x: 0.2, y: 0.5 }, { x: 0.8, y: 0.5 }, { ts: 16 }),
+      DEFAULT_THR,
+    );
+    const delta1 = spread.events.find((e) => e.kind === 'twoHandResizeDelta');
+    expect(delta1).toBeDefined();
+    if (delta1 && delta1.kind === 'twoHandResizeDelta') {
+      expect(delta1.scale).toBeCloseTo(1.5, 2);
+    }
+    // Close to 0.2 → scale 0.5
+    const close = step(
+      s,
+      twoPinchingHands({ x: 0.4, y: 0.5 }, { x: 0.6, y: 0.5 }, { ts: 32 }),
+      DEFAULT_THR,
+    );
+    const delta2 = close.events.find((e) => e.kind === 'twoHandResizeDelta');
+    expect(delta2).toBeDefined();
+    if (delta2 && delta2.kind === 'twoHandResizeDelta') {
+      expect(delta2.scale).toBeCloseTo(0.5, 2);
+    }
+  });
+
+  it('emits twoHandResizeEnd when one hand releases its pinch', () => {
+    const s = createFsmState(DEFAULT_THR);
+    step(s, twoPinchingHands({ x: 0.3, y: 0.5 }, { x: 0.7, y: 0.5 }, { ts: 0 }), DEFAULT_THR);
+    // Second hand opens its pinch (distance > exit threshold).
+    const released: [HandLandmarks, HandLandmarks] = [
+      handWithPinchDistance(0.03, { ts: 16, pointer: { x: 0.3, y: 0.5 } }),
+      handWithPinchDistance(0.2, { ts: 16, pointer: { x: 0.7, y: 0.5 } }),
+    ];
+    const out = step(s, released, DEFAULT_THR);
+    expect(kinds(out.events)).toContain('twoHandResizeEnd');
+    expect(out.state.kind).toBe('TRACKING');
+    expect(out.state.resize).toBeNull();
+  });
+
+  it('emits twoHandResizeEnd when one hand disappears mid-resize', () => {
+    const s = createFsmState(DEFAULT_THR);
+    step(s, twoPinchingHands({ x: 0.3, y: 0.5 }, { x: 0.7, y: 0.5 }, { ts: 0 }), DEFAULT_THR);
+    // Drop to one hand still pinching.
+    const oneLeft = [handWithPinchDistance(0.03, { ts: 16, pointer: { x: 0.3, y: 0.5 } })];
+    const out = step(s, oneLeft, DEFAULT_THR);
+    expect(kinds(out.events)).toContain('twoHandResizeEnd');
+    expect(out.state.kind).toBe('TRACKING');
+  });
+
+  it('emits twoHandResizeEnd when both hands disappear mid-resize', () => {
+    const s = createFsmState(DEFAULT_THR);
+    step(s, twoPinchingHands({ x: 0.3, y: 0.5 }, { x: 0.7, y: 0.5 }, { ts: 0 }), DEFAULT_THR);
+    const out = step(s, [], DEFAULT_THR);
+    expect(kinds(out.events)).toContain('twoHandResizeEnd');
+    expect(kinds(out.events)).toContain('idle');
+    expect(out.state.kind).toBe('IDLE');
+  });
+
+  it('two hands present but only one pinching falls through to single-hand pinch', () => {
+    const s = createFsmState(DEFAULT_THR);
+    const hands: [HandLandmarks, HandLandmarks] = [
+      handWithPinchDistance(0.03, { ts: 16, pointer: { x: 0.3, y: 0.5 } }),
+      handWithPinchDistance(0.2, { ts: 16, pointer: { x: 0.7, y: 0.5 } }),
+    ];
+    const out = step(s, hands, DEFAULT_THR);
+    expect(kinds(out.events)).toContain('pinchDown');
+    expect(out.state.kind).toBe('PINCH_LEFT');
+    expect(out.events.some((e) => e.kind === 'twoHandResizeStart')).toBe(false);
+  });
+
+  it('hysteresis keeps the resize state across small fingertip jitter', () => {
+    const s = createFsmState(DEFAULT_THR);
+    // Enter
+    step(s, twoPinchingHands({ x: 0.3, y: 0.5 }, { x: 0.7, y: 0.5 }, { ts: 0 }), DEFAULT_THR);
+    // Both pinches jitter up to 0.07 — between enter (0.06) and exit (0.085). Stay in.
+    const jitter = step(
+      s,
+      twoPinchingHands({ x: 0.3, y: 0.5 }, { x: 0.7, y: 0.5 }, { ts: 16, pinchDist: 0.07 }),
+      DEFAULT_THR,
+    );
+    expect(jitter.state.kind).toBe('TWO_HAND_RESIZE');
+    expect(jitter.events.some((e) => e.kind === 'twoHandResizeEnd')).toBe(false);
+  });
+});

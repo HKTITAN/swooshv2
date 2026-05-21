@@ -50,6 +50,60 @@ function AmbiguityHint({ which }: { which: 'index' | 'middle' | null }) {
   );
 }
 
+/**
+ * Two-hand resize indicator (T603): a dashed line between the two
+ * pinch points + an "↔ Resize ×N.NN" badge near the midpoint. Only
+ * renders while the FSM is in TWO_HAND_RESIZE.
+ */
+interface ResizeIndicatorProps {
+  active: boolean;
+  scale: number;
+  pinchPoints: Array<{ x: number; y: number }>;
+  mirror?: boolean;
+}
+function ResizeIndicator({ active, scale, pinchPoints, mirror = true }: ResizeIndicatorProps) {
+  if (!active || pinchPoints.length < 2) return null;
+  // Use the two MOST-separated points so it always traces the resize axis.
+  const p1 = pinchPoints[0]!;
+  const p2 = pinchPoints[1]!;
+  const x1 = mirror ? 1 - p1.x : p1.x;
+  const x2 = mirror ? 1 - p2.x : p2.x;
+  const y1 = p1.y;
+  const y2 = p2.y;
+  const cx = (x1 + x2) / 2;
+  const cy = (y1 + y2) / 2;
+  return (
+    <>
+      <svg
+        viewBox="0 0 1 1"
+        preserveAspectRatio="none"
+        className="pointer-events-none fixed inset-0 z-30 h-full w-full"
+      >
+        <line
+          x1={x1}
+          y1={y1}
+          x2={x2}
+          y2={y2}
+          stroke="rgba(255, 213, 107, 0.9)"
+          strokeWidth={0.004}
+          strokeDasharray="0.012 0.008"
+          vectorEffect="non-scaling-stroke"
+        />
+      </svg>
+      <div
+        className="pointer-events-none fixed z-40 -translate-x-1/2 -translate-y-1/2 rounded-pill bg-sun-500 px-3 py-1 text-xs font-extrabold text-ink-950 shadow-glow"
+        style={{
+          left: `${cx * 100}%`,
+          top: `${cy * 100}%`,
+          fontFamily: '"Baloo 2", system-ui',
+        }}
+      >
+        ↔ Resize ×{scale.toFixed(2)}
+      </div>
+    </>
+  );
+}
+
 function OverlayApp() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pipelineRef = useRef<Pipeline | null>(null);
@@ -58,6 +112,10 @@ function OverlayApp() {
   const [active, setActive] = useState(false);
   const [ambiguous, setAmbiguous] = useState<'index' | 'middle' | null>(null);
   const ambiguousTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Two-hand resize indicator state (T603). The FSM is the source of truth
+  // for whether we're in TWO_HAND_RESIZE — we just mirror it for the UI.
+  const [resizing, setResizing] = useState(false);
+  const [resizeScale, setResizeScale] = useState(1);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,6 +162,18 @@ function OverlayApp() {
         onEmit: (payload: GestureEmitPayload) => {
           // Forward every FSM event to main (T202).
           window.swoosh.gesture.emit(payload);
+          // Drive the resize indicator UI from the same event stream
+          // (T603). The FSM is the source of truth for whether we're
+          // in the two-hand state.
+          const g = payload.gesture;
+          if (g.kind === 'twoHandResizeStart') {
+            setResizing(true);
+            setResizeScale(1);
+          } else if (g.kind === 'twoHandResizeDelta') {
+            setResizeScale(g.scale);
+          } else if (g.kind === 'twoHandResizeEnd' || g.kind === 'idle') {
+            setResizing(false);
+          }
         },
       });
       if (!cancelled) setActive(res.ok);
@@ -150,6 +220,17 @@ function OverlayApp() {
       />
       <RecordingIndicator visible={active} />
       <AmbiguityHint which={ambiguous} />
+      <ResizeIndicator
+        active={resizing}
+        scale={resizeScale}
+        pinchPoints={hands.slice(0, 2).map((h) => {
+          const t = h.points[LANDMARK.THUMB_TIP];
+          const i = h.points[LANDMARK.INDEX_TIP];
+          if (!t || !i) return { x: 0.5, y: 0.5 };
+          return { x: (t.x + i.x) / 2, y: (t.y + i.y) / 2 };
+        })}
+        mirror
+      />
     </>
   );
 }

@@ -21,6 +21,7 @@
 import type { GestureEmitPayload } from '@swoosh/shared/ipc';
 import type { InputDispatcher } from './dispatcher';
 import { mapToScreen } from './coords';
+import { createResizeDispatcher } from '../windows/resize';
 
 export interface GestureRouter {
   handle(payload: GestureEmitPayload): void;
@@ -31,6 +32,7 @@ export interface GestureRouter {
 export function createGestureRouter(input: InputDispatcher): GestureRouter {
   let enabled = true;
   let lastMoveAt = 0;
+  const resize = createResizeDispatcher();
   // Throttle moveCursor at ~120 Hz to avoid hammering the OS layer on
   // very high-FPS cameras. The OS will smooth its own pointer between
   // events anyway.
@@ -83,11 +85,17 @@ export function createGestureRouter(input: InputDispatcher): GestureRouter {
           void input.keystroke(combo);
           break;
         }
+        case 'twoHandResizeStart':
+          resize.begin();
+          break;
+        case 'twoHandResizeDelta':
+          resize.applyScale(g.scale);
+          break;
+        case 'twoHandResizeEnd':
+          resize.end();
+          break;
         case 'idle':
         case 'tracking':
-        case 'twoHandResizeStart':
-        case 'twoHandResizeDelta':
-        case 'twoHandResizeEnd':
           break;
       }
     },
