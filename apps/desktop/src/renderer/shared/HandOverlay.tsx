@@ -21,6 +21,7 @@
 import { useEffect, useRef } from 'react';
 import type { HandLandmarks, Landmark } from '@swoosh/shared/types';
 import { LANDMARK } from '@swoosh/shared/types';
+import { handPresence } from '@swoosh/shared/gesture/landmarks';
 
 export type HandOverlayStyle = 'default' | 'highContrast' | 'minimal';
 
@@ -224,6 +225,13 @@ export function HandOverlay({
       const pts = hand.points;
       if (!pts || pts.length < 21) continue;
 
+      // Distance-aware presence: scale the whole hand's drawing alpha
+      // by how big the hand looks in the frame. A close hand reads
+      // vivid; a far hand reads as a faint silhouette. Saved + restored
+      // around each hand so other passes (pinch glow) can opt out.
+      const presence = handPresence(hand);
+      ctx.globalAlpha = presence;
+
       // 1. Palm fill — drawn first so finger tubes overlap it cleanly.
       if (tokens.palmFill) {
         drawPalmFill(ctx, hand, tokens.palmFill, cssW, cssH);
@@ -282,6 +290,9 @@ export function HandOverlay({
       }
 
       // 4. Pinch glow between thumb and index — soft radial gradient.
+      // Glow is gestural feedback; keep it at full alpha even when the
+      // hand fades, so the user always sees the pinch land.
+      ctx.globalAlpha = 1;
       if (pinchGlow && tokens.glow) {
         const thumb = pts[LANDMARK.THUMB_TIP];
         const index = pts[LANDMARK.INDEX_TIP];
@@ -303,6 +314,9 @@ export function HandOverlay({
         }
       }
     }
+
+    // Reset for the next render pass.
+    ctx.globalAlpha = 1;
   }, [landmarks, style, pinchGlow, mirror]);
 
   // Resize the canvas backing store on container size changes.

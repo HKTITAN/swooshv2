@@ -106,3 +106,50 @@ export function pinchAnchor(hand: HandLandmarks): { x: number; y: number } {
   if (!thumb || !index) return palmCenter(hand);
   return midpoint(thumb, index);
 }
+
+/**
+ * Largest dimension of the hand's axis-aligned bounding box in
+ * normalized [0..1] space. A close hand spans a large fraction of
+ * the frame; a far hand spans a small one — so this is a stable
+ * proxy for "how close is this hand to the camera". Robust to hand
+ * pose (works whether the fingers are spread or curled) because
+ * we use the whole landmark set.
+ */
+export function handSize(hand: HandLandmarks): number {
+  let minX = 1;
+  let minY = 1;
+  let maxX = 0;
+  let maxY = 0;
+  for (const p of hand.points) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return Math.max(maxX - minX, maxY - minY);
+}
+
+/**
+ * Map hand size onto a 0..1 "presence" value used for distance-aware
+ * fading of the on-screen overlay.
+ *
+ * - A hand that occupies < 10% of the frame's longest axis fades
+ *   toward a 0.3 floor (still visible, but subtle).
+ * - A hand that fills > 40% of the frame is fully opaque.
+ * - Linear in between with a smooth ease so the fade reads as
+ *   gradual rather than stepped.
+ *
+ * The 0.3 floor matters: when the user's hand drifts to the edge of
+ * the frame the overlay shouldn't disappear (that would feel like a
+ * bug), it should just feel less assertive.
+ */
+export function handPresence(hand: HandLandmarks): number {
+  const NEAR = 0.4;
+  const FAR = 0.1;
+  const FLOOR = 0.3;
+  const t = (handSize(hand) - FAR) / (NEAR - FAR);
+  const clamped = t < 0 ? 0 : t > 1 ? 1 : t;
+  // Smoothstep for a gentler curve than pure linear.
+  const eased = clamped * clamped * (3 - 2 * clamped);
+  return FLOOR + (1 - FLOOR) * eased;
+}

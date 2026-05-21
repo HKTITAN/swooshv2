@@ -16,6 +16,7 @@ import { createPipeline, type Pipeline } from '../shared/pipeline';
 import { HAND_LANDMARKER_MODEL_URL, MEDIAPIPE_WASM_URL } from '../shared/mediapipeAssets';
 import type { HandLandmarks } from '@swoosh/shared/types';
 import { LANDMARK } from '@swoosh/shared/types';
+import { handPresence } from '@swoosh/shared/gesture/landmarks';
 import type { GestureEmitPayload, UserSettings } from '@swoosh/shared/ipc';
 import './styles.css';
 
@@ -100,18 +101,21 @@ interface SwooshCursorProps {
   pos: { x: number; y: number } | null;
   pinching: boolean;
   hidden: boolean;
+  /** 0..1 presence — fades the cursor with hand distance. */
+  presence: number;
   mirror?: boolean;
 }
-function SwooshCursor({ pos, pinching, hidden, mirror = true }: SwooshCursorProps) {
+function SwooshCursor({ pos, pinching, hidden, presence, mirror = true }: SwooshCursorProps) {
   if (!pos || hidden) return null;
   const x = mirror ? 1 - pos.x : pos.x;
   return (
     <div
       aria-hidden
-      className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2"
+      className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-200"
       style={{
         left: `${x * 100}%`,
         top: `${pos.y * 100}%`,
+        opacity: presence,
       }}
     >
       <div
@@ -370,6 +374,7 @@ function OverlayApp() {
       <SwooshCursor
         pos={cursorPos}
         pinching={pinching}
+        presence={hands.length > 0 ? handPresence(hands[0]!) : 0.3}
         hidden={!active || !handVisible || cameraLost || resizing}
         mirror
       />
