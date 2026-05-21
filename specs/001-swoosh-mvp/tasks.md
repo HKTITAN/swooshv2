@@ -147,12 +147,12 @@ description: "Task list for Swoosh MVP — atomic, dependency-ordered, ralph-loo
 
 ## Phase 6 — User Story 4: Open-Palm Scroll & Swipe (P2)
 
-- [ ] T400 [US4] Extend FSM with `OPEN_PALM` state — entered when all five fingertips are extended (per `isHandOpen`)
-- [ ] T401 [US4] Scroll: while in OPEN_PALM, accumulate palm vertical displacement, emit `scroll { dy }` when above per-frame minimum; respects `scrollSensitivity`
-- [ ] T402 [US4] Swipe: detect quick horizontal palm motion (> N px/frame for ≥ 3 consecutive frames followed by deceleration); emit `swipe { left | right }`
-- [ ] T403 [US4] In `gestureRouter`, map `scroll` → `dispatcher.scroll(0, dy)` and `swipe` → keystroke (alt+tab / alt+shift+tab on Win/Linux; ctrl+tab variants for browsers via active-app detection if available)
-- [ ] T404 [P] [US4] FSM unit tests for open-palm sequences (steady up, steady down, flick left, flick right)
-- [ ] T405 [P] [US4] Manual smoke test file `apps/desktop/tests/manual/us4.md`
+- [x] T400 [US4] Extend FSM with `OPEN_PALM` state — entered when all five fingertips are extended (per `isHandOpen`)
+- [x] T401 [US4] Scroll: while in OPEN_PALM, accumulate palm vertical displacement, emit `scroll { dy }` when above per-frame minimum; respects `scrollSensitivity`
+- [x] T402 [US4] Swipe: detect quick horizontal palm motion (> N px/frame for ≥ 3 consecutive frames followed by deceleration); emit `swipe { left | right }`
+- [x] T403 [US4] In `gestureRouter`, map `scroll` → `dispatcher.scroll(0, dy)` and `swipe` → keystroke (alt+tab / alt+shift+tab on Win/Linux; ctrl+tab variants for browsers via active-app detection if available)
+- [x] T404 [P] [US4] FSM unit tests for open-palm sequences (steady up, steady down, flick left, flick right)
+- [x] T405 [P] [US4] Manual smoke test file `apps/desktop/tests/manual/us4.md`
 
 ---
 
