@@ -37,14 +37,14 @@ description: "Task list for Swoosh MVP — atomic, dependency-ordered, ralph-loo
 
 ### Shared package (pure TypeScript, no Electron dep)
 
-- [ ] T020 [P] Implement `packages/shared/src/types.ts` mirroring `specs/001-swoosh-mvp/contracts/types.ts`
-- [ ] T021 [P] Implement `packages/shared/src/ipc.ts` mirroring `specs/001-swoosh-mvp/contracts/ipc.ts`, exporting `DEFAULT_USER_SETTINGS`
-- [ ] T022 [P] Implement `packages/shared/src/settings.schema.ts` — Zod schema matching `UserSettings`, plus a `parseOrDefault` helper
-- [ ] T023 Implement `packages/shared/src/gesture/filters.ts` — 1-Euro filter class (one-axis), with unit-tested `filter(value, ts)` returning smoothed value
-- [ ] T024 [P] Implement `packages/shared/src/gesture/landmarks.ts` — helpers: `pinchDistance(handLandmarks, fingerA, fingerB)`, `isHandOpen(handLandmarks)`, `palmCenter(handLandmarks)`
-- [ ] T025 Implement `packages/shared/src/gesture/fsm.ts` — pure reducer `step(prev, frame, settings) → { state, events, pointer }` supporting tracking/idle/pinch states with hysteresis (left + right click only at this stage)
-- [ ] T026 [P] Unit tests for `filters.ts` — input step function, verify smoothing converges
-- [ ] T027 [P] Unit tests for `fsm.ts` — synthetic frame sequences cover: tracking → pinchDown → pinchUp → click, drag (movement during pinch), hysteresis prevents flicker, right-click variant
+- [x] T020 [P] Implement `packages/shared/src/types.ts` mirroring `specs/001-swoosh-mvp/contracts/types.ts`
+- [x] T021 [P] Implement `packages/shared/src/ipc.ts` mirroring `specs/001-swoosh-mvp/contracts/ipc.ts`, exporting `DEFAULT_USER_SETTINGS`
+- [x] T022 [P] Implement `packages/shared/src/settings.schema.ts` — Zod schema matching `UserSettings`, plus a `parseOrDefault` helper
+- [x] T023 Implement `packages/shared/src/gesture/filters.ts` — 1-Euro filter class (one-axis), with unit-tested `filter(value, ts)` returning smoothed value
+- [x] T024 [P] Implement `packages/shared/src/gesture/landmarks.ts` — helpers: `pinchDistance(handLandmarks, fingerA, fingerB)`, `isHandOpen(handLandmarks)`, `palmCenter(handLandmarks)`
+- [x] T025 Implement `packages/shared/src/gesture/fsm.ts` — pure reducer `step(prev, frame, settings) → { state, events, pointer }` supporting tracking/idle/pinch states with hysteresis (left + right click only at this stage)
+- [x] T026 [P] Unit tests for `filters.ts` — input step function, verify smoothing converges
+- [x] T027 [P] Unit tests for `fsm.ts` — synthetic frame sequences cover: tracking → pinchDown → pinchUp → click, drag (movement during pinch), hysteresis prevents flicker, right-click variant
 
 ### Electron main process skeleton
 
