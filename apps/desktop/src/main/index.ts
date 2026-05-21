@@ -28,6 +28,7 @@ import { registerIpcHandlers } from './ipc';
 import { closeTutorialWindow, createTutorialWindow } from './windows/tutorial';
 import { createOverlayWindow, closeOverlayWindow } from './windows/overlay';
 import { destroySettingsWindow, openSettingsWindow } from './windows/settings';
+import { destroyTrayPopover, toggleTrayPopover } from './windows/trayPopover';
 import { createTrackingController } from './tracking';
 import { createTray, trayStateFor } from './tray';
 
@@ -112,6 +113,9 @@ function bootstrap(): void {
   tray.setOnOpenAbout(() => {
     logger.info('about requested (no-op)');
   });
+  tray.setOnLeftClick((bounds) => {
+    toggleTrayPopover(bounds);
+  });
 
   const disposeIpc = registerIpcHandlers({
     settings,
@@ -126,6 +130,7 @@ function bootstrap(): void {
     onTutorialReplay: () => {
       createTutorialWindow();
     },
+    onOpenSettings: () => openSettingsWindow(),
     onQuit: () => app.quit(),
   });
 
@@ -155,6 +160,7 @@ function teardown(): void {
     context.tray.destroy();
     closeOverlayWindow();
     destroySettingsWindow();
+    destroyTrayPopover();
   } catch (err) {
     logger.error('teardown failed', { err: String(err) });
   }

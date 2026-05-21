@@ -25,6 +25,8 @@ export interface RendererToMain {
   /** Tutorial. */
   'tutorial:complete': () => Promise<void>;
   'tutorial:replay': () => Promise<void>;
+  /** Open the settings window (from popover, hotkey, etc.). */
+  'window:openSettings': () => void;
   /** Quit. */
   'app:quit': () => void;
   /** Updates. */
@@ -63,6 +65,7 @@ export const IPC = {
   tutorialComplete: 'tutorial:complete',
   tutorialReplay: 'tutorial:replay',
   tutorialShow: 'tutorial:show',
+  windowOpenSettings: 'window:openSettings',
   appQuit: 'app:quit',
   overlayResize: 'overlay:resize',
   updateCheck: 'update:check',

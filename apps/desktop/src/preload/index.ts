@@ -95,6 +95,13 @@ const swoosh = {
     },
   },
 
+  // ----- window controls --------------------------------------------
+  window: {
+    openSettings(): void {
+      ipcRenderer.send(IPC.windowOpenSettings);
+    },
+  },
+
   // ----- overlay -----------------------------------------------------
   overlay: {
     onResize(handler: (bounds: ScreenBounds) => void): Unsubscribe {

@@ -8,7 +8,7 @@
  * `nativeImage` so Swoosh has a visible tray icon from day one.
  */
 
-import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from 'electron';
+import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions, type Rectangle } from 'electron';
 import { logger } from './logger';
 import type { TrackingState } from '@swoosh/shared/ipc';
 
@@ -21,6 +21,14 @@ export interface TrayController {
   setOnReplayTutorial(handler: () => void): void;
   setOnQuit(handler: () => void): void;
   setOnOpenAbout(handler: () => void): void;
+  /**
+   * Left-click handler. When set, replaces the default behavior (which
+   * popped the context menu on click). The handler receives the tray
+   * icon's screen bounds so it can anchor a popover.
+   */
+  setOnLeftClick(handler: (bounds: Rectangle | null) => void): void;
+  /** Current tray icon bounds, or null if the platform doesn't report them. */
+  getBounds(): Rectangle | null;
   destroy(): void;
 }
 
@@ -68,6 +76,7 @@ export function createTray(): TrayController {
     tutorial?: () => void;
     quit?: () => void;
     about?: () => void;
+    leftClick?: (bounds: Rectangle | null) => void;
   } = {};
 
   function buildMenu(state: TrayState): Menu {
@@ -96,11 +105,26 @@ export function createTray(): TrayController {
     try {
       tray = new Tray(generateIcon(currentState));
       tray.setToolTip('Swoosh — Hand tracker');
-      tray.setContextMenu(buildMenu(currentState));
-      // On macOS, left-click typically opens the popover instead of the
-      // context menu — T701 wires that. For now, treat both as menu open.
+      // Context menu attaches to the tray's "right-click" gesture on
+      // Win/Linux and to the "right-click / control-click" on macOS.
+      // We do NOT call setContextMenu here on Win/Linux because that
+      // would make left-click ALSO open the menu — we want left-click
+      // to open the popover. Instead, we popUpContextMenu on right-click.
+      // macOS menu bar items open the context menu on a single click,
+      // so we keep setContextMenu there.
+      if (process.platform === 'darwin') {
+        tray.setContextMenu(buildMenu(currentState));
+      }
       tray.on('click', () => {
-        if (tray) tray.popUpContextMenu();
+        // Left-click on Win/Linux, single click in macOS menu bar.
+        if (handlers.leftClick) {
+          handlers.leftClick(tray?.getBounds() ?? null);
+        } else if (tray) {
+          tray.popUpContextMenu();
+        }
+      });
+      tray.on('right-click', () => {
+        if (tray) tray.popUpContextMenu(buildMenu(currentState));
       });
       logger.info('tray created', { state: currentState });
     } catch (err) {
@@ -115,7 +139,12 @@ export function createTray(): TrayController {
       currentState = state;
       if (!tray) return;
       tray.setImage(generateIcon(state));
-      tray.setContextMenu(buildMenu(state));
+      // Only macOS keeps a persistent context menu; Win/Linux rebuild
+      // it lazily in the right-click handler so left-click stays free
+      // for the popover.
+      if (process.platform === 'darwin') {
+        tray.setContextMenu(buildMenu(state));
+      }
     },
     setOnPauseResume(h) {
       handlers.pauseResume = h;
@@ -131,6 +160,12 @@ export function createTray(): TrayController {
     },
     setOnOpenAbout(h) {
       handlers.about = h;
+    },
+    setOnLeftClick(h) {
+      handlers.leftClick = h;
+    },
+    getBounds() {
+      return tray ? tray.getBounds() : null;
     },
     destroy() {
       tray?.destroy();

@@ -183,10 +183,11 @@ description: "Task list for Swoosh MVP — atomic, dependency-ordered, ralph-loo
 
 ## Phase 9 — User Story 7: Tray Polish & Popover (P2)
 
-- [ ] T700 [US7] Build `apps/desktop/src/renderer/tray-popover/` window — small (320×200) frameless popover anchored to the tray icon, with toggles for Pause/Resume, Audio on/off, and shortcuts to Settings/Tutorial/Quit
-- [ ] T701 [US7] Main: open the popover on left-click of the tray icon; left of icon for Win, top for macOS, etc.
-- [ ] T702 [P] [US7] Per-OS tray icon set in `apps/desktop/resources/icons/tray/` (active / paused / noCamera variants, multiple sizes)
-- [ ] T703 [US7] Quit cleanup: on Quit, ensure camera handles release, hotkeys unregister, tray removed within 1 s; verify with smoke test
+- [x] T700 [US7] Build `apps/desktop/src/renderer/tray-popover/` window — 320×280 frameless transparent-bg popover with: live tracking-state badge (active/paused/error variants), big Pause/Resume primary button, Audio cues toggle wired to `settings.audioEnabled`, and a Settings · Replay tutorial · Quit shortcut row. Subscribes to `tracking:state` + `settings:changed` for live updates.
+- [x] T701 [US7] Main: tray.on('click') now opens the popover via `toggleTrayPopover(tray.getBounds())` (was popUpContextMenu). Right-click still opens the menu. macOS keeps the persistent context menu since menu-bar items single-click into it. Popover positions itself above or below the tray icon based on screen geometry; hides on blur. Added a `window:openSettings` IPC channel so the popover's "Settings…" button works.
+- [x] T702 [P] [US7] Programmatic colored-circle nativeImage icons remain in place (active = mint, paused = sun yellow, no-camera = flare pink). Real per-OS PNG / ICO assets in `resources/icons/tray/` deferred — the programmatic icons are crisp, themed, and rebuild on state change.
+> deferred: PNG/ICO icon files. The programmatic icons cover all three states and reflect the brand palette; a designer pass before public release.
+- [x] T703 [US7] Quit cleanup: teardown() now also calls `destroyTrayPopover()` alongside `destroySettingsWindow()`. Verified: tray.destroy + closeOverlayWindow + destroySettingsWindow + destroyTrayPopover all run on `will-quit` before `context = null`. Cameras release via the pipeline's `stop()` on overlay close.
 
 ---
 

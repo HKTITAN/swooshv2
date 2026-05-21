@@ -31,6 +31,7 @@ export interface IpcDeps {
   listCameras?: () => Promise<CameraSource[]>;
   onTutorialComplete?: () => Promise<void> | void;
   onTutorialReplay?: () => Promise<void> | void;
+  onOpenSettings?: () => void;
   onQuit?: () => void;
   checkForUpdate?: () => Promise<UpdateCheckResult>;
   installUpdate?: () => Promise<void>;
@@ -87,6 +88,11 @@ export function registerIpcHandlers(deps: IpcDeps): () => void {
     await deps.onTutorialReplay?.();
   });
 
+  // --- Window controls ------------------------------------------------
+  ipcMain.on(IPC.windowOpenSettings, () => {
+    deps.onOpenSettings?.();
+  });
+
   // --- App quit -------------------------------------------------------
   ipcMain.on(IPC.appQuit, () => {
     deps.onQuit?.();
@@ -130,6 +136,7 @@ export function registerIpcHandlers(deps: IpcDeps): () => void {
     ipcMain.removeAllListeners(IPC.trackingPause);
     ipcMain.removeAllListeners(IPC.trackingResume);
     ipcMain.removeAllListeners(IPC.appQuit);
+    ipcMain.removeAllListeners(IPC.windowOpenSettings);
     logger.info('IPC handlers disposed');
   };
 }
