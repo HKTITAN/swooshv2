@@ -9,14 +9,27 @@
  * constitution's privacy principle: no Google Fonts at runtime).
  */
 
-/* Baloo 2 variable font. Replace the binary at the path below with the
- * actual woff2 download from https://fonts.google.com/specimen/Baloo+2.
- * See ./fonts/README.md for the licensing note. */
+/* Baloo 2 — three weights (latin subset). Self-hosted; OFL license
+ * is in ./fonts/LICENSE-Baloo2.txt. Three static weights instead of
+ * a variable file because Google Fonts serves Baloo 2 as static. */
 @font-face {
   font-family: 'Baloo 2';
-  src: url('./fonts/Baloo2-Variable.woff2') format('woff2-variations'),
-       url('./fonts/Baloo2-Variable.woff2') format('woff2');
-  font-weight: 400 800;
+  src: url('./fonts/Baloo2-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Baloo 2';
+  src: url('./fonts/Baloo2-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Baloo 2';
+  src: url('./fonts/Baloo2-ExtraBold.woff2') format('woff2');
+  font-weight: 800;
   font-style: normal;
   font-display: swap;
 }

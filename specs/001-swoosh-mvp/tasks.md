@@ -26,7 +26,7 @@ description: "Task list for Swoosh MVP — atomic, dependency-ordered, ralph-loo
 - [x] T007 Bootstrap `apps/desktop` with `package.json` declaring electron, electron-vite, react, react-dom, zustand, zod, tailwindcss, framer-motion, @mediapipe/tasks-vision, @nut-tree-fork/nut-js, electron-store, electron-log, electron-updater
 - [x] T008 Add `apps/desktop/electron.vite.config.ts` configuring main, preload, and a multi-entry renderer (overlay, settings, tutorial, tray-popover)
 - [x] T009 [P] Add `apps/desktop/tailwind.config.ts` + `postcss.config.js` and define color tokens for the bold/playful palette
-- [x] T010 [P] Add Baloo 2 woff2 placeholder under `apps/desktop/src/renderer/shared-ui/fonts/` (README + OFL note; actual font binary still to be dropped). The `@font-face` declaration lives in `theme.css` (added in T050).
+- [x] T010 [P] Add Baloo 2 woff2 under `apps/desktop/src/renderer/shared-ui/fonts/` (three weights: 400/600/800 latin subset, plus upstream OFL license). The `@font-face` declarations live in `theme.css` (added in T050).
 - [x] T011 [P] Add root npm scripts: `dev`, `build`, `test`, `test:e2e`, `lint`, `package`, `package:all`
 - [x] T012 [P] Add ESLint flat config with @typescript-eslint, react, react-hooks, and Prettier integration
 - [x] T013 Install dependencies (`pnpm install`) and verify `pnpm run lint` passes on the empty scaffold
