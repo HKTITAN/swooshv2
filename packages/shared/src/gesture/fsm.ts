@@ -65,6 +65,14 @@ export interface FsmState {
   pinch?: PinchSubstate;
   /** Last smoothed pointer position. */
   lastPointer: { x: number; y: number };
+  /**
+   * Tie-break aid for ambiguous pinches: timestamp of the most recent
+   * frame in which the corresponding finger was OPEN (above exit
+   * threshold). When both index and middle pinch simultaneously, the
+   * finger that transitioned from open → closed most recently wins.
+   */
+  lastIndexOpenTs: number;
+  lastMiddleOpenTs: number;
 }
 
 export function createFsmState(thresholds: FsmThresholds): FsmState {
@@ -75,6 +83,8 @@ export function createFsmState(thresholds: FsmThresholds): FsmState {
       beta: thresholds.smoothing.beta,
     }),
     lastPointer: { x: 0.5, y: 0.5 },
+    lastIndexOpenTs: 0,
+    lastMiddleOpenTs: 0,
   };
 }
 
@@ -145,6 +155,13 @@ export function step(
     thr.pinchEnterThreshold,
     thr.pinchExitThreshold,
   );
+
+  // Per-finger open-state tracking for tie-breaking (T301): record the
+  // latest timestamp at which each finger was OPEN. When both fingers
+  // happen to cross the enter threshold on the same frame, we pick the
+  // one whose open-window ended most recently.
+  if (!leftClosed) prev.lastIndexOpenTs = hand.ts;
+  if (!rightClosed) prev.lastMiddleOpenTs = hand.ts;
 
   const events: Gesture[] = [];
   const dragThreshold = thr.clickDragThreshold ?? 0.01;
@@ -222,8 +239,15 @@ export function step(
       events.push({ kind: 'tracking' });
     }
   } else {
-    // IDLE or TRACKING: see if a new pinch starts. Left wins ties.
-    if (leftClosed) {
+    // IDLE or TRACKING: see if a new pinch starts.
+    // Tie-break: when both fingers are within the enter threshold on
+    // the same frame, prefer the more-recently-EXTENDED finger — i.e.,
+    // the one that was last seen open. This is the finger the user is
+    // most likely actively closing now.
+    const startBoth = leftClosed && rightClosed;
+    const preferRight = startBoth && prev.lastMiddleOpenTs > prev.lastIndexOpenTs;
+
+    if (leftClosed && !preferRight) {
       events.push({ kind: 'pinchDown', button: 'left' });
       prev.kind = 'PINCH_LEFT';
       prev.pinch = {

@@ -185,6 +185,62 @@ describe('FSM — right click variant', () => {
   });
 });
 
+function handForTieBreak(
+  ts: number,
+  opts: { indexOpen: boolean; middleOpen: boolean },
+): HandLandmarks {
+  const points: Landmark[] = Array.from({ length: 21 }, () => ({ x: 0, y: 0, z: 0 }));
+  points[LANDMARK.THUMB_TIP] = { x: 0.5, y: 0.5, z: 0 };
+  // Open ⇒ distance 0.2 (well above exit). Closed ⇒ distance 0.02 (well below enter).
+  points[LANDMARK.INDEX_TIP] = opts.indexOpen
+    ? { x: 0.5, y: 0.7, z: 0 }
+    : { x: 0.51, y: 0.5, z: 0 };
+  points[LANDMARK.MIDDLE_TIP] = opts.middleOpen
+    ? { x: 0.7, y: 0.5, z: 0 }
+    : { x: 0.5, y: 0.51, z: 0 };
+  return { points, handedness: 'Right', score: 0.95, ts };
+}
+
+describe('FSM — tie-breaking (both fingers in range)', () => {
+  it('prefers index (left) when index opened more recently than middle', () => {
+    const s = createFsmState(DEFAULT_THR);
+    // t=0: both open
+    step(s, [handForTieBreak(0, { indexOpen: true, middleOpen: true })], DEFAULT_THR);
+    // t=10: middle closes (now in PINCH_RIGHT), index still open → lastIndexOpenTs = 10
+    // (We don't actually want to enter PINCH_RIGHT here; just record open ts.)
+    // Simpler: keep both open through t=50, then on t=60 close both at once.
+    step(s, [handForTieBreak(50, { indexOpen: true, middleOpen: true })], DEFAULT_THR);
+    // At this point both lastIndexOpenTs and lastMiddleOpenTs == 50.
+    // Now manually skew: make middle "closed" for one frame so its
+    // lastMiddleOpenTs stops updating; index still open.
+    // But this would cause PINCH_RIGHT to fire. To avoid that, set state
+    // directly:
+    s.lastIndexOpenTs = 100;
+    s.lastMiddleOpenTs = 50;
+    // Now close both fingers on the same frame.
+    const out = step(
+      s,
+      [handForTieBreak(200, { indexOpen: false, middleOpen: false })],
+      DEFAULT_THR,
+    );
+    const pd = out.events.find((e) => e.kind === 'pinchDown');
+    expect(pd && 'button' in pd ? pd.button : null).toBe('left');
+  });
+
+  it('prefers middle (right) when middle opened more recently than index', () => {
+    const s = createFsmState(DEFAULT_THR);
+    s.lastIndexOpenTs = 50;
+    s.lastMiddleOpenTs = 100;
+    const out = step(
+      s,
+      [handForTieBreak(200, { indexOpen: false, middleOpen: false })],
+      DEFAULT_THR,
+    );
+    const pd = out.events.find((e) => e.kind === 'pinchDown');
+    expect(pd && 'button' in pd ? pd.button : null).toBe('right');
+  });
+});
+
 describe('FSM — losing the hand', () => {
   it('emits pinchUp + idle when hand disappears mid-pinch', () => {
     const s = createFsmState(DEFAULT_THR);
