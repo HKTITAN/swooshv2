@@ -33,6 +33,15 @@ export interface FsmThresholds {
    * Default ~0.01 of frame width ≈ ~13 px at 1280px wide.
    */
   clickDragThreshold?: number;
+  /**
+   * Safety: if a pinch is held longer than this many ms with cursor
+   * movement under `dragLockMaxTravel`, force-release. Prevents the
+   * user from getting stuck in a drag-lock when their hand goes still.
+   * Default 5000 ms.
+   */
+  dragLockTimeoutMs?: number;
+  /** See dragLockTimeoutMs. Default 0.006 (≈ 8 px at 1280px wide). */
+  dragLockMaxTravel?: number;
   smoothing: { minCutoff: number; beta: number };
 }
 
@@ -142,6 +151,9 @@ export function step(
 
   // State transitions.
   // Priority: keep currently-active pinch sticky until it physically opens.
+  const dragLockTimeout = thr.dragLockTimeoutMs ?? 5000;
+  const dragLockMaxTravel = thr.dragLockMaxTravel ?? 0.006;
+
   if (prev.kind === 'PINCH_LEFT') {
     // Track travel.
     if (prev.pinch) {
@@ -149,6 +161,20 @@ export function step(
       const dy = pointer.y - prev.pinch.downAt.y;
       const travel = Math.hypot(dx, dy);
       if (travel > prev.pinch.maxTravel) prev.pinch.maxTravel = travel;
+    }
+
+    // Drag-lock safety: if pinch held too long with too little movement,
+    // force-release as if the user opened their fingers.
+    if (
+      prev.pinch &&
+      hand.ts - prev.pinch.downTs > dragLockTimeout &&
+      prev.pinch.maxTravel < dragLockMaxTravel
+    ) {
+      events.push({ kind: 'pinchUp', button: 'left' });
+      prev.kind = 'TRACKING';
+      prev.pinch = undefined;
+      events.push({ kind: 'tracking' });
+      return { state: prev, events, pointer };
     }
 
     if (!leftClosed) {
@@ -169,6 +195,18 @@ export function step(
       const dy = pointer.y - prev.pinch.downAt.y;
       const travel = Math.hypot(dx, dy);
       if (travel > prev.pinch.maxTravel) prev.pinch.maxTravel = travel;
+    }
+
+    if (
+      prev.pinch &&
+      hand.ts - prev.pinch.downTs > dragLockTimeout &&
+      prev.pinch.maxTravel < dragLockMaxTravel
+    ) {
+      events.push({ kind: 'pinchUp', button: 'right' });
+      prev.kind = 'TRACKING';
+      prev.pinch = undefined;
+      events.push({ kind: 'tracking' });
+      return { state: prev, events, pointer };
     }
 
     if (!rightClosed) {
