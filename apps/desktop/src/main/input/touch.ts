@@ -40,6 +40,13 @@ const POINTER_FLAG_DOWN = 0x00010000;
 const POINTER_FLAG_UPDATE = 0x00020000;
 const POINTER_FLAG_UP = 0x00040000;
 
+// POINTER_BUTTON_CHANGE_TYPE enum values. Set on the packet to tell
+// Windows which button changed state for this event. Optional for
+// touch per the docs but some kernel paths validate it.
+const POINTER_CHANGE_NONE = 0;
+const POINTER_CHANGE_FIRSTBUTTON_DOWN = 1;
+const POINTER_CHANGE_FIRSTBUTTON_UP = 2;
+
 // PT_TOUCH discriminator for the POINTER_INFO union.
 const PT_TOUCH = 0x00000002;
 
@@ -139,6 +146,13 @@ function packTouchInfo(x: number, y: number, flags: number, pointerId = 0): Buff
   const iy = Math.round(y);
   const buf = Buffer.alloc(POINTER_TOUCH_INFO_SIZE);
 
+  // Map the gesture flag (DOWN / UPDATE / UP) to the matching
+  // POINTER_BUTTON_CHANGE_TYPE enum value. Some kernel paths
+  // validate that this agrees with the flag bits.
+  let buttonChange = POINTER_CHANGE_NONE;
+  if (flags & POINTER_FLAG_DOWN) buttonChange = POINTER_CHANGE_FIRSTBUTTON_DOWN;
+  else if (flags & POINTER_FLAG_UP) buttonChange = POINTER_CHANGE_FIRSTBUTTON_UP;
+
   // POINTER_INFO (96 bytes including 4-byte trailing pad to 8-align)
   buf.writeUInt32LE(PT_TOUCH, 0);
   buf.writeUInt32LE(pointerId, 4);
@@ -155,14 +169,12 @@ function packTouchInfo(x: number, y: number, flags: number, pointerId = 0): Buff
   buf.writeInt32LE(0, 56); // ptHimetricLocationRaw.x
   buf.writeInt32LE(0, 60); // ptHimetricLocationRaw.y
   // dwTime MUST be non-zero (or PerformanceCount must — never both).
-  // We set dwTime; PerformanceCount stays 0. Each successive call has
-  // a higher dwTime via the monotonic tickEpoch counter.
   buf.writeUInt32LE(nextTick(), 64);
   buf.writeUInt32LE(0, 68); // historyCount
   buf.writeInt32LE(0, 72); // inputData
   buf.writeUInt32LE(0, 76); // dwKeyStates
   buf.writeBigUInt64LE(0n, 80); // performanceCount = 0 (using dwTime instead)
-  buf.writeInt32LE(0, 88); // buttonChangeType (enum)
+  buf.writeInt32LE(buttonChange, 88); // buttonChangeType
   // 92-95: trailing struct padding (already zeroed by Buffer.alloc)
 
   // POINTER_TOUCH_INFO tail (48 bytes)
@@ -216,13 +228,19 @@ export function getTouchInjector(): TouchApi {
     );
     // BOOL InjectTouchInput(UINT32 count, const POINTER_TOUCH_INFO *contacts);
     // We declare contacts as void* and pass a hand-packed Buffer to
-    // eliminate any chance of koffi struct-padding bugs.
+    // eliminate any chance of koffi struct-padding bugs. The
+    // { errno: true } option tells koffi to capture GetLastError
+    // IMMEDIATELY after the call — without it, intervening koffi
+    // calls can reset the thread's last-error value, giving us a
+    // misleading code (every call returns 87 even when the real
+    // problem is something else).
     const InjectTouchInput = user32.func(
       '__stdcall',
       'InjectTouchInput',
       'int32',
       ['uint32', 'void*'],
-    );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ) as ((...args: unknown[]) => number) & { errno?: () => number };
     const GetLastError = kernel32.func(
       '__stdcall',
       'GetLastError',
@@ -265,21 +283,24 @@ export function getTouchInjector(): TouchApi {
       try {
         const ok = InjectTouchInput(1, buf);
         if (ok === 0) {
+          // Capture errno BEFORE any other koffi work so we get the
+          // actual Win32 error from InjectTouchInput, not a stale
+          // value reset by an intervening call.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const koffiErrno = (koffi as any).errno?.() as number | undefined;
+          const winLastError = GetLastError();
           const now = Date.now();
           if (now - lastInjectErrLog > 1000) {
             lastInjectErrLog = now;
-            const err = GetLastError();
             logger.warn('InjectTouchInput returned 0', {
-              lastError: err,
+              koffiErrno: koffiErrno ?? null,
+              winLastError,
               flags: buf.readUInt32LE(12),
               x: buf.readInt32LE(32),
               y: buf.readInt32LE(36),
             });
             if (!dumpedHex) {
               dumpedHex = true;
-              // One-time full hex dump so we can verify the byte
-              // layout against the Windows headers if touch keeps
-              // failing on this host.
               logger.warn('POINTER_TOUCH_INFO bytes', {
                 hex: buf.toString('hex'),
                 length: buf.length,
