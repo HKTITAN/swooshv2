@@ -1,0 +1,53 @@
+appId: dev.swoosh.app
+productName: Swoosh
+copyright: Copyright © 2026 Swoosh contributors
+
+directories:
+  output: release/${version}
+  buildResources: resources
+
+files:
+  - out/**
+  - package.json
+  - resources/**
+
+asarUnpack:
+  - resources/**
+
+publish:
+  provider: github
+  owner: TODO-set-github-owner
+  repo: swoosh
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: resources/icons/win/icon.ico
+  artifactName: ${productName}-Setup-${version}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-Setup-${version}.${ext}
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - universal
+  category: public.app-category.utilities
+  icon: resources/icons/mac/icon.icns
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+linux:
+  target:
+    - AppImage
+    - deb
+  icon: resources/icons/linux
+  category: Utility
+  artifactName: ${productName}-${version}-${arch}.${ext}
