@@ -68,7 +68,11 @@ function OverlayApp() {
       const video = videoRef.current;
       if (!video) return;
       const pipeline = createPipeline({
-        wasmBaseUrl: new URL('@mediapipe/tasks-vision/wasm', import.meta.url).href,
+        // MediaPipe WASM is loaded from the official CDN at the version
+        // pinned in package.json. Once T800 lands offline benchmark
+        // support we'll switch to a local copy under resources/.
+        wasmBaseUrl:
+          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm',
         modelAssetUrl:
           'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
       });

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Swoosh — Setup</title>
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data: blob:; script-src 'self'; connect-src 'self' data: blob:; img-src 'self' data: blob:; media-src 'self' blob:;" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' data: blob: https://cdn.jsdelivr.net; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; connect-src 'self' data: blob: https://storage.googleapis.com https://cdn.jsdelivr.net; img-src 'self' data: blob:; media-src 'self' blob:;" />
   </head>
   <body>
     <div id="root"></div>
