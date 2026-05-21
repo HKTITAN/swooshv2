@@ -46,8 +46,12 @@ const PT_TOUCH = 0x00000002;
 const TOUCH_FEEDBACK_NONE = 0x3;
 
 // touchMask tells Windows which auxiliary fields in POINTER_TOUCH_INFO
-// are valid. We always populate rcContact and pressure.
+// are valid. Microsoft's TouchInjection sample populates all three
+// (contactarea + orientation + pressure); Windows rejects with
+// ERROR_INVALID_PARAMETER if you populate a field but don't claim it
+// in the mask, or vice versa.
 const TOUCH_MASK_CONTACTAREA = 0x00000001;
+const TOUCH_MASK_ORIENTATION = 0x00000002;
 const TOUCH_MASK_PRESSURE = 0x00000004;
 const TOUCH_FLAG_NONE = 0x0;
 
@@ -111,10 +115,14 @@ function buildTouchInfo(
       buttonChangeType: 0,
     },
     touchFlags: TOUCH_FLAG_NONE,
-    touchMask: TOUCH_MASK_CONTACTAREA | TOUCH_MASK_PRESSURE,
+    touchMask: TOUCH_MASK_CONTACTAREA | TOUCH_MASK_ORIENTATION | TOUCH_MASK_PRESSURE,
     rcContact: contactRect,
     rcContactRaw: contactRect,
-    orientation: 0,
+    // Match the Microsoft TouchInjection sample exactly: orientation
+    // 90° (palm-down finger), pressure 32000 (mid-range of the 0..65535
+    // documented field width despite the MSDN doc page citing 0..1024
+    // — the sample uses 32000 and it works).
+    orientation: 90,
     pressure: 32000,
   };
 }
@@ -203,6 +211,14 @@ export function getTouchInjector(): TouchApi {
       return cached;
     }
 
+    // Sanity-log the struct sizes so we can confirm the FFI layout
+    // matches what Windows expects on this host (POINTER_INFO must be
+    // 96 bytes on x64, POINTER_TOUCH_INFO must be 144).
+    logger.info('touch injection struct sizes', {
+      pointerInfo: koffi.sizeof(POINTER_INFO),
+      pointerTouchInfo: koffi.sizeof(POINTER_TOUCH_INFO),
+    });
+
     // Logging is throttled because a failed drag can fire 60 events
     // per second and we don't want to spam the rotating log file.
     let lastInjectErrLog = 0;
@@ -214,10 +230,15 @@ export function getTouchInjector(): TouchApi {
           if (now - lastInjectErrLog > 1000) {
             lastInjectErrLog = now;
             const err = GetLastError();
+            const info = packet.pointerInfo as {
+              pointerFlags: number;
+              ptPixelLocation: { x: number; y: number };
+            };
             logger.warn('InjectTouchInput returned 0', {
               lastError: err,
-              flags: (packet as { pointerInfo: { pointerFlags: number } })
-                .pointerInfo.pointerFlags,
+              flags: info.pointerFlags,
+              x: info.ptPixelLocation.x,
+              y: info.ptPixelLocation.y,
             });
           }
           return false;
