@@ -113,17 +113,17 @@ const unavailable: TouchApi = {
   pressUp: () => false,
 };
 
-// Monotonically increasing frame id + tick clock for every packet we
-// send. Windows rejects packets with dwTime == 0 AND PerformanceCount
-// == 0; it also expects successive frames to have strictly increasing
-// time. Sharing one counter across the whole module guarantees both.
+// Monotonically increasing frame id for every packet we send. Windows
+// rejects packets with dwTime == 0 AND PerformanceCount == 0; it also
+// expects successive frames to have monotonically advancing time.
 let nextFrameId = 1;
-const tickEpoch = Date.now();
+// kernel32!GetTickCount, set in getTouchInjector(). Returns ms since
+// system boot — what Windows wants for dwTime. Falling back to
+// Date.now() if for some reason it isn't loaded.
+let nativeGetTickCount: (() => number) | null = null;
 function nextTick(): number {
-  // Truncate to 32 bits; this needs to be roughly system-tick-like
-  // (milliseconds since some recent epoch). The value is opaque to
-  // Windows as long as it monotonically advances.
-  return (Date.now() - tickEpoch) >>> 0;
+  if (nativeGetTickCount) return nativeGetTickCount() >>> 0;
+  return Date.now() >>> 0;
 }
 
 function packTouchInfo(x: number, y: number, flags: number, pointerId = 0): Buffer {
@@ -174,7 +174,11 @@ function packTouchInfo(x: number, y: number, flags: number, pointerId = 0): Buff
   buf.writeInt32LE(ix + 2, 128);
   buf.writeInt32LE(iy + 2, 132);
   buf.writeUInt32LE(90, 136); // orientation — 90° per the MS sample
-  buf.writeUInt32LE(1024, 140); // pressure — top of MSDN 0..1024 range
+  // pressure — Microsoft's official TouchInjection sample uses 32000
+  // even though MSDN documents the range as 0..1024. The sample is
+  // the source of truth here; pressure = 32000 is what's known to
+  // work everywhere.
+  buf.writeUInt32LE(32000, 140);
 
   return buf;
 }
@@ -217,6 +221,18 @@ export function getTouchInjector(): TouchApi {
       'uint32',
       [],
     );
+    // DWORD GetTickCount(void) — system uptime in ms. Windows expects
+    // POINTER_INFO.dwTime to be a real tick value, not an arbitrary
+    // counter. The two were drifting apart with our Date.now()-epoch
+    // approach and Windows rejected the packet as "in the past".
+    const GetTickCount = kernel32.func(
+      '__stdcall',
+      'GetTickCount',
+      'uint32',
+      [],
+    );
+    // Expose to the packer below.
+    nativeGetTickCount = GetTickCount;
 
     const initOk = InitializeTouchInjection(MAX_CONTACTS, TOUCH_FEEDBACK_NONE);
     if (!initOk) {
