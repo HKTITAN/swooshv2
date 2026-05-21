@@ -27,10 +27,12 @@ const isWindows = process.platform === 'win32';
 
 // Pointer flag bits — see Windows.h. Set on the touch packet to tell
 // the OS what kind of event this is (initial down, update, release).
-const POINTER_FLAG_NEW = 0x00000001;
+// Microsoft's official sample uses DOWN | INRANGE | INCONTACT for the
+// initial press, UPDATE | INRANGE | INCONTACT for moves, and UP alone
+// for release. NEW / PRIMARY aren't required and including them
+// causes Windows to return ERROR_INVALID_PARAMETER in some cases.
 const POINTER_FLAG_INRANGE = 0x00000002;
 const POINTER_FLAG_INCONTACT = 0x00000004;
-const POINTER_FLAG_PRIMARY = 0x00002000;
 const POINTER_FLAG_DOWN = 0x00010000;
 const POINTER_FLAG_UPDATE = 0x00020000;
 const POINTER_FLAG_UP = 0x00040000;
@@ -43,9 +45,10 @@ const PT_TOUCH = 0x00000002;
 // own SwooshCursor.
 const TOUCH_FEEDBACK_NONE = 0x3;
 
-// Touch mask + flags. We don't supply orientation/pressure, so the
-// mask is zero and Windows uses defaults.
-const TOUCH_MASK_NONE = 0x0;
+// touchMask tells Windows which auxiliary fields in POINTER_TOUCH_INFO
+// are valid. We always populate rcContact and pressure.
+const TOUCH_MASK_CONTACTAREA = 0x00000001;
+const TOUCH_MASK_PRESSURE = 0x00000004;
 const TOUCH_FLAG_NONE = 0x0;
 
 const MAX_CONTACTS = 10;
@@ -80,11 +83,13 @@ function buildTouchInfo(
   flags: number,
   pointerId = 0,
 ): Record<string, unknown> {
+  const ix = Math.round(x);
+  const iy = Math.round(y);
   const contactRect = {
-    left: Math.round(x) - 2,
-    top: Math.round(y) - 2,
-    right: Math.round(x) + 2,
-    bottom: Math.round(y) + 2,
+    left: ix - 2,
+    top: iy - 2,
+    right: ix + 2,
+    bottom: iy + 2,
   };
   return {
     pointerInfo: {
@@ -94,8 +99,8 @@ function buildTouchInfo(
       pointerFlags: flags,
       sourceDevice: null,
       hwndTarget: null,
-      ptPixelLocation: { x: Math.round(x), y: Math.round(y) },
-      ptPixelLocationRaw: { x: Math.round(x), y: Math.round(y) },
+      ptPixelLocation: { x: ix, y: iy },
+      ptPixelLocationRaw: { x: ix, y: iy },
       ptHimetricLocation: { x: 0, y: 0 },
       ptHimetricLocationRaw: { x: 0, y: 0 },
       dwTime: 0,
@@ -106,7 +111,7 @@ function buildTouchInfo(
       buttonChangeType: 0,
     },
     touchFlags: TOUCH_FLAG_NONE,
-    touchMask: TOUCH_MASK_NONE,
+    touchMask: TOUCH_MASK_CONTACTAREA | TOUCH_MASK_PRESSURE,
     rcContact: contactRect,
     rcContactRaw: contactRect,
     orientation: 0,
@@ -168,6 +173,7 @@ export function getTouchInjector(): TouchApi {
     });
 
     const user32 = koffi.load('user32.dll');
+    const kernel32 = koffi.load('kernel32.dll');
     const InitializeTouchInjection = user32.func(
       '__stdcall',
       'InitializeTouchInjection',
@@ -180,18 +186,43 @@ export function getTouchInjector(): TouchApi {
       'int32',
       ['uint32', koffi.pointer(POINTER_TOUCH_INFO)],
     );
+    const GetLastError = kernel32.func(
+      '__stdcall',
+      'GetLastError',
+      'uint32',
+      [],
+    );
 
     const initOk = InitializeTouchInjection(MAX_CONTACTS, TOUCH_FEEDBACK_NONE);
     if (!initOk) {
-      logger.warn('InitializeTouchInjection returned 0 — falling back to mouse');
+      const err = GetLastError();
+      logger.warn('InitializeTouchInjection returned 0 — falling back to mouse', {
+        lastError: err,
+      });
       cached = unavailable;
       return cached;
     }
 
+    // Logging is throttled because a failed drag can fire 60 events
+    // per second and we don't want to spam the rotating log file.
+    let lastInjectErrLog = 0;
     function inject(packet: Record<string, unknown>): boolean {
       try {
         const ok = InjectTouchInput(1, [packet]);
-        return ok !== 0;
+        if (ok === 0) {
+          const now = Date.now();
+          if (now - lastInjectErrLog > 1000) {
+            lastInjectErrLog = now;
+            const err = GetLastError();
+            logger.warn('InjectTouchInput returned 0', {
+              lastError: err,
+              flags: (packet as { pointerInfo: { pointerFlags: number } })
+                .pointerInfo.pointerFlags,
+            });
+          }
+          return false;
+        }
+        return true;
       } catch (err) {
         logger.warn('InjectTouchInput threw', { err: String(err) });
         return false;
@@ -203,25 +234,14 @@ export function getTouchInjector(): TouchApi {
       tap(x, y) {
         // Down + immediate up. The OS interprets a contact with no
         // movement as a tap → click for legacy apps, touch event for
-        // modern apps.
+        // modern apps. Flags match Microsoft's TouchInjection sample.
         const down = buildTouchInfo(
           x,
           y,
-          POINTER_FLAG_NEW |
-            POINTER_FLAG_INRANGE |
-            POINTER_FLAG_INCONTACT |
-            POINTER_FLAG_DOWN |
-            POINTER_FLAG_PRIMARY,
+          POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
         );
         if (!inject(down)) return false;
-        // Touch up — Windows treats a contact under ~50 ms as a tap.
-        // We send the UP packet synchronously; the kernel sequences
-        // the two events correctly.
-        const up = buildTouchInfo(
-          x,
-          y,
-          POINTER_FLAG_UP | POINTER_FLAG_PRIMARY,
-        );
+        const up = buildTouchInfo(x, y, POINTER_FLAG_UP);
         return inject(up);
       },
       pressDown(x, y) {
@@ -229,11 +249,7 @@ export function getTouchInjector(): TouchApi {
           buildTouchInfo(
             x,
             y,
-            POINTER_FLAG_NEW |
-              POINTER_FLAG_INRANGE |
-              POINTER_FLAG_INCONTACT |
-              POINTER_FLAG_DOWN |
-              POINTER_FLAG_PRIMARY,
+            POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
           ),
         );
       },
@@ -242,15 +258,12 @@ export function getTouchInjector(): TouchApi {
           buildTouchInfo(
             x,
             y,
-            POINTER_FLAG_INRANGE |
-              POINTER_FLAG_INCONTACT |
-              POINTER_FLAG_UPDATE |
-              POINTER_FLAG_PRIMARY,
+            POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
           ),
         );
       },
       pressUp(x, y) {
-        return inject(buildTouchInfo(x, y, POINTER_FLAG_UP | POINTER_FLAG_PRIMARY));
+        return inject(buildTouchInfo(x, y, POINTER_FLAG_UP));
       },
     };
 
