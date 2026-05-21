@@ -81,8 +81,9 @@ description: "Task list for Swoosh MVP — atomic, dependency-ordered, ralph-loo
 
 ### Hand overlay renderer
 
-- [ ] T080 Implement `apps/desktop/src/renderer/shared/HandOverlay.tsx` — Canvas-backed component that draws 21 landmarks + joint lines for each detected hand in the chosen outline style (default / high contrast / minimal); supports a `pinchGlow` prop to glow at the active pinch point
+- [x] T080 Implement `apps/desktop/src/renderer/shared/HandOverlay.tsx` — Canvas-backed component that draws 21 landmarks + joint lines for each detected hand in the chosen outline style (default / high contrast / minimal); supports a `pinchGlow` prop to glow at the active pinch point
 - [ ] T081 [P] Unit-level visual test (Playwright component) for HandOverlay rendering each style variant
+> blocked: needs @playwright/experimental-ct-react dependency and a playwright-ct.config.ts not yet present; deferred to the polish phase.
 
 **Checkpoint**: Foundation complete. All user stories can now begin.
 
