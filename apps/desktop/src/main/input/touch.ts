@@ -220,6 +220,7 @@ export function getTouchInjector(): TouchApi {
     });
 
     let lastInjectErrLog = 0;
+    let dumpedHex = false;
     function inject(buf: Buffer): boolean {
       try {
         const ok = InjectTouchInput(1, buf);
@@ -234,6 +235,16 @@ export function getTouchInjector(): TouchApi {
               x: buf.readInt32LE(32),
               y: buf.readInt32LE(36),
             });
+            if (!dumpedHex) {
+              dumpedHex = true;
+              // One-time full hex dump so we can verify the byte
+              // layout against the Windows headers if touch keeps
+              // failing on this host.
+              logger.warn('POINTER_TOUCH_INFO bytes', {
+                hex: buf.toString('hex'),
+                length: buf.length,
+              });
+            }
           }
           return false;
         }
