@@ -6,7 +6,16 @@ const rendererRoot = resolve(__dirname, 'src/renderer');
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    // `@swoosh/shared` lives outside this package in the pnpm workspace.
+    // If we externalize it, electron-builder's asar packer refuses to
+    // walk out of apps/desktop to find its package.json. Bundling it
+    // into the main entry keeps everything self-contained.
+    plugins: [externalizeDepsPlugin({ exclude: ['@swoosh/shared'] })],
+    resolve: {
+      alias: {
+        '@swoosh/shared': resolve(__dirname, '../../packages/shared/src'),
+      },
+    },
     build: {
       outDir: 'out/main',
       lib: {
@@ -15,7 +24,12 @@ export default defineConfig({
     },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin({ exclude: ['@swoosh/shared'] })],
+    resolve: {
+      alias: {
+        '@swoosh/shared': resolve(__dirname, '../../packages/shared/src'),
+      },
+    },
     build: {
       outDir: 'out/preload',
       lib: {
