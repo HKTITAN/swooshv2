@@ -57,8 +57,8 @@ description: "Task list for Swoosh MVP — atomic, dependency-ordered, ralph-loo
 
 ### Preload
 
-- [ ] T040 Implement `apps/desktop/src/preload/index.ts` — uses `contextBridge.exposeInMainWorld('swoosh', {...})` to expose a typed API surface matching the IPC contract (invoke + on + off)
-- [ ] T041 [P] Add ambient TypeScript declaration `apps/desktop/src/renderer/swoosh.d.ts` so renderer code is fully typed against `window.swoosh`
+- [x] T040 Implement `apps/desktop/src/preload/index.ts` — uses `contextBridge.exposeInMainWorld('swoosh', {...})` to expose a typed API surface matching the IPC contract (invoke + on + off)
+- [x] T041 [P] Add ambient TypeScript declaration `apps/desktop/src/renderer/swoosh.d.ts` so renderer code is fully typed against `window.swoosh`
 
 ### Renderer foundation
 
