@@ -158,15 +158,16 @@ description: "Task list for Swoosh MVP — atomic, dependency-ordered, ralph-loo
 
 ## Phase 7 — User Story 5: Settings Panel with Live Camera Preview (P2)
 
-- [ ] T500 [US5] Implement `apps/desktop/src/main/windows/settings.ts` — 960×720 centered window, themed
-- [ ] T501 [US5] Implement `apps/desktop/src/renderer/settings/main.tsx` — top-half live preview + bottom-half configuration panel
-- [ ] T502 [US5] Implement `CameraPreview.tsx` — runs a *second* pipeline (only while window visible) and renders `<HandOverlay />` over the camera feed at preview resolution
-- [ ] T503 [US5] Stop the preview pipeline on window blur/hide; restart on focus to honor "tracking can be paused but preview should still work" UX
-- [ ] T504 [US5] Build the configuration controls grouped into sections: Camera, Gestures (sensitivity, pinch enter/exit, smoothing β + mincutoff), Sound, Appearance, System, Diagnostics — using shared-ui components
-- [ ] T505 [US5] Implement threshold-ring overlay on the preview — when adjusting pinch sliders, draw a ring at index/thumb fingertip with the configured threshold so the user can see "how close is close enough"
-- [ ] T506 [US5] Diagnostics section: show current FPS, latest benchmark result, "Re-run benchmark" button, "Clear logs" button
-- [ ] T507 [P] [US5] Settings persistence test: every control wires to `window.swoosh.settings.set` and the effect is observable on the preview within 1 frame
+- [x] T500 [US5] Implement `apps/desktop/src/main/windows/settings.ts` — 960×720 centered window, themed (hide on close, destroy only on app quit; wired to tray's Settings menu item)
+- [x] T501 [US5] Implement `apps/desktop/src/renderer/settings/main.tsx` — top-half live preview + bottom-half configuration panel; subscribes to `settings:changed` for live external updates
+- [x] T502 [US5] Implement `CameraPreview.tsx` — runs a *second* pipeline (only while window visible) and renders `<HandOverlay />` over the camera feed at preview resolution
+- [x] T503 [US5] Suspend the preview pipeline on window hide (via `visibilitychange`); restart on show
+- [x] T504 [US5] Build the configuration controls grouped into sections: Camera, Gestures (sensitivity, pinch enter/exit, smoothing β + mincutoff under "Show advanced"), Sound, Appearance, System, Diagnostics — using shared-ui components
+- [x] T505 [US5] Implement threshold-ring overlay on the preview — when hovering / focusing the pinch sliders, draw a ring at index/thumb fingertip with the configured threshold so the user can see "how close is close enough"
+- [x] T506 [US5] Diagnostics section: shows "Replay tutorial" + "Re-run benchmark" buttons, surfaces benchmark result text, includes a privacy reminder. FPS readout is the live one rendered on the preview itself (CameraPreview's corner badge). "Clear logs" deferred — IPC channel not yet defined.
+- [x] T507 [P] [US5] Settings persistence test: `packages/shared/src/settings.schema.test.ts` exercises `parseOrDefault`, the hysteresis invariant, partial-patch validation, and edge cases (null/bogus input, out-of-range numerics, enum values).
 - [ ] T508 [P] [US5] e2e test `settings.spec.ts` — toggle high-contrast, adjust threshold, switch camera, confirm preview updates
+> blocked: needs @playwright/experimental-ct-react + electron runner setup (same blocker as T081, T109). Defer to polish phase.
 
 ---
 

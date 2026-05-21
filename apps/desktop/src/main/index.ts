@@ -27,6 +27,7 @@ import { createGestureRouter } from './input/gestureRouter';
 import { registerIpcHandlers } from './ipc';
 import { closeTutorialWindow, createTutorialWindow } from './windows/tutorial';
 import { createOverlayWindow, closeOverlayWindow } from './windows/overlay';
+import { destroySettingsWindow, openSettingsWindow } from './windows/settings';
 import { createTrackingController } from './tracking';
 import { createTray, trayStateFor } from './tray';
 
@@ -100,8 +101,7 @@ function bootstrap(): void {
     else tracking.pause('trayToggle');
   });
   tray.setOnOpenSettings(() => {
-    // T500 lands the settings window — for now, log + no-op.
-    logger.info('settings requested from tray (T500 pending)');
+    openSettingsWindow();
   });
   tray.setOnReplayTutorial(() => {
     createTutorialWindow();
@@ -154,6 +154,7 @@ function teardown(): void {
     context.disposeIpc();
     context.tray.destroy();
     closeOverlayWindow();
+    destroySettingsWindow();
   } catch (err) {
     logger.error('teardown failed', { err: String(err) });
   }

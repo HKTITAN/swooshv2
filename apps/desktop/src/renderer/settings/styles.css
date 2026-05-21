@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('../shared-ui/theme.css');
+
+html, body, #root {
+  background: var(--swoosh-ink-950);
+}
+
+#root {
+  min-height: 100vh;
+}
