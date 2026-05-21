@@ -14,7 +14,7 @@
     "build": "pnpm --filter swoosh-desktop build",
     "test": "pnpm -r --if-present test",
     "test:e2e": "pnpm --filter swoosh-desktop test:e2e",
-    "typecheck": "pnpm -r --if-present exec tsc --noEmit",
+    "typecheck": "pnpm -r --if-present typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
     "package": "pnpm --filter swoosh-desktop package",
